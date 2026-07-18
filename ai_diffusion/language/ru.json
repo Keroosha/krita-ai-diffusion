@@ -593,6 +593,8 @@
     "Workflow Parameters": "Параметры рабочего процесса",
     "Detected workloads for the following base models:": "Обнаруженные рабочие процессы для следующих базовых моделей:",
     "Reset all parameters to their default values": "Сбросить все параметры к значениям по умолчанию",
-    "Use ROCm (AMD GPU)": null
+    "Use ROCm (AMD GPU)": null,
+    "Anime and illustration model with strong character rendering. Biased toward non-realistic artwork and not intended for realistic photography.": null,
+    "Anima models": null
   }
 }

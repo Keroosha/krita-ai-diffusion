@@ -315,7 +315,7 @@ def _enabled_workloads(selected: list[str], required: Iterable[ModelResource], s
 
 class CustomPackageTab(QWidget):
     title = _("Individual Packages")
-    workloads = (Arch.sd15, Arch.sdxl, Arch.flux, Arch.flux2_4b, Arch.zimage)
+    workloads = (Arch.sd15, Arch.sdxl, Arch.flux, Arch.flux2_4b, Arch.anima, Arch.zimage)
     workload_models = resources.required_models
 
     selected_models_changed = pyqtSignal()
@@ -337,7 +337,14 @@ class CustomPackageTab(QWidget):
 
         self._workload_group = PackageGroupWidget(
             _("Workloads"),
-            [_("Stable Diffusion 1.5"), _("Stable Diffusion XL"), "Flux", "Flux 2", "Z-Image"],
+            [
+                _("Stable Diffusion 1.5"),
+                _("Stable Diffusion XL"),
+                "Flux",
+                "Flux 2",
+                "Anima",
+                "Z-Image",
+            ],
             description=(
                 _("Choose a Diffusion base model to install its basic requirements.")
                 + " <a href='https://docs.interstice.cloud/base-models'>"
@@ -393,6 +400,13 @@ class CustomPackageTab(QWidget):
                 is_expanded=False,
                 parent=self,
             ),
+            "anima": PackageGroupWidget(
+                _("Anima models"),
+                [m for m in optional_models if m.arch is Arch.anima],
+                is_checkable=True,
+                is_expanded=False,
+                parent=self,
+            ),
             "zimage": PackageGroupWidget(
                 _("Z-Image models"),
                 [m for m in optional_models if m.arch is Arch.zimage],
@@ -402,7 +416,7 @@ class CustomPackageTab(QWidget):
             ),
         }
 
-        for group in ["upscalers", "sd15", "sdxl", "illu", "flux", "flux2", "zimage"]:
+        for group in ["upscalers", "sd15", "sdxl", "illu", "flux", "flux2", "anima", "zimage"]:
             self._packages[group].changed.connect(self._change_models)
             layout.addWidget(self._packages[group])
 
@@ -599,7 +613,7 @@ class ModelCheckBox:
 
 class WorkloadsTab(QWidget):
     title = _("Workloads")
-    workloads = (Arch.sdxl, Arch.illu, Arch.flux2_4b, Arch.zimage, Arch.flux, Arch.sd15)
+    workloads = (Arch.sdxl, Arch.illu, Arch.flux2_4b, Arch.anima, Arch.zimage, Arch.flux, Arch.sd15)
     workload_models = resources.required_models + resources.recommended_models
 
     selected_models_changed = pyqtSignal()
@@ -675,6 +689,32 @@ class WorkloadsTab(QWidget):
                 Arch.flux2_4b,
                 ("checkpoint-fp8-flux2_4b", "checkpoint-q6_k-flux2_4b"),
                 flux2_layout,
+            ),
+        ]
+
+        self.add_separator(layout)
+        self._pkg_anima = QWidget(self)
+        layout.addWidget(self._pkg_anima)
+
+        anima_layout = QVBoxLayout(self._pkg_anima)
+        anima_header = QLabel("<b>Anima Base v1.0</b>", self._pkg_anima)
+        anima_layout.addWidget(anima_header)
+        anima_props = ModelPropsWidget(
+            size=6, vram=8, speed=0, fidelity=1, understanding=0, parent=self
+        )
+        anima_layout.addWidget(anima_props)
+        desc = _(
+            "Anime and illustration model with strong character rendering. Biased toward non-realistic artwork and not intended for realistic photography."
+        )
+        anima_desc = QLabel(desc, self._pkg_anima)
+        anima_desc.setWordWrap(True)
+        anima_layout.addWidget(anima_desc)
+        self._models += [
+            ModelCheckBox(
+                "Anima Base v1.0 - " + _("for Anime and illustration"),
+                Arch.anima,
+                "checkpoint-base-anima",
+                anima_layout,
             ),
         ]
 

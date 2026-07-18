@@ -212,9 +212,11 @@ class ComfyClient(Client):
 
         ip_adapter_models = nodes.options("IPAdapterModelLoader", "ipadapter_file")
         available_resources.update(_find_ip_adapters(ip_adapter_models))
+        available_resources.update(_find_anima_ip_adapter_resources(nodes))
 
         model_patches = nodes.options("ModelPatchLoader", "name")
         available_resources.update(_find_model_patches(model_patches))
+        available_resources.update(_find_anima_model_patch_resources(nodes))
 
         style_models = nodes.options("StyleModelLoader", "style_model_name")
         available_resources.update(_find_style_models(style_models))
@@ -778,8 +780,32 @@ def _find_ip_adapters(model_list: Sequence[str]):
     return {
         resource_id(kind, ver, mode): _find_model(model_list, kind, ver, mode)
         for mode, ver in product(ControlMode, Arch.list())
-        if mode.is_ip_adapter
+        if mode.is_ip_adapter and ver is not Arch.anima
     }
+
+
+def _find_anima_ip_adapter(model_list: Sequence[str]):
+    id = ResourceId(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)
+    search_paths = resources.search_path(id.kind, id.arch, id.identifier)
+    assert search_paths is not None
+    names = {name.lower() for name in search_paths}
+    found = next(
+        (
+            filename
+            for filename in model_list
+            if filename.replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+            in names
+        ),
+        None,
+    )
+    return {id.string: found}
+
+
+def _find_anima_ip_adapter_resources(nodes: ComfyObjectInfo):
+    if "AnimaIPAdapterLoader" not in nodes or "AnimaIPAdapterApply" not in nodes:
+        return {}
+    model_list = nodes.options("AnimaIPAdapterLoader", "ip_adapter_name")
+    return _find_anima_ip_adapter(model_list)
 
 
 def _find_clip_vision_model(model_list: Sequence[str]):
@@ -801,6 +827,30 @@ def _find_model_patches(model_list: Sequence[str]):
         ResourceId(ResourceKind.model_patch, Arch.zimage, ControlMode.blur),
     ]
     return {r.string: _find_model(model_list, r.kind, r.arch, r.identifier) for r in res}
+
+
+def _find_anima_model_patches(model_list: Sequence[str]):
+    modes = [
+        ControlMode.inpaint,
+        ControlMode.universal,
+        ControlMode.scribble,
+        ControlMode.line_art,
+        ControlMode.depth,
+        ControlMode.pose,
+    ]
+    return {
+        resource_id(ResourceKind.model_patch, Arch.anima, mode): _find_model(
+            model_list, ResourceKind.model_patch, Arch.anima, mode
+        )
+        for mode in modes
+    }
+
+
+def _find_anima_model_patch_resources(nodes: ComfyObjectInfo):
+    if "ModelPatchLoader" not in nodes or "AnimaLLLiteApply" not in nodes:
+        return {}
+    model_list = nodes.options("ModelPatchLoader", "name")
+    return _find_anima_model_patches(model_list)
 
 
 def _find_style_models(model_list: Sequence[str]):

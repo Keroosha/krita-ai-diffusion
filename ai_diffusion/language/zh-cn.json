@@ -593,6 +593,8 @@
     "Workflow Parameters": "工作流参数",
     "Detected workloads for the following base models:": "检测到以下基础模型的工作负载：",
     "Reset all parameters to their default values": "将所有参数重置为默认值",
-    "Use ROCm (AMD GPU)": null
+    "Use ROCm (AMD GPU)": null,
+    "Anime and illustration model with strong character rendering. Biased toward non-realistic artwork and not intended for realistic photography.": null,
+    "Anima models": null
   }
 }

@@ -136,7 +136,7 @@ class ControlLayer(QObject, ObservableProperties):
                 if image.extent.height > extent.height:
                     w = (image.extent.width * extent.height) // image.extent.height
                     image = Image.scale(image, Extent(w, extent.height))
-            else:
+            elif self._model.arch is not Arch.anima:
                 image = Image.scale(image, self.clip_vision_extent)
 
         strength = self.strength / self.strength_multiplier
@@ -152,6 +152,8 @@ class ControlLayer(QObject, ObservableProperties):
         is_supported = True
         if client := root.connection.client_if_connected:
             models = client.models.for_arch(self._model.arch)
+            if models.arch is Arch.anima and self.mode.is_ip_adapter:
+                self.has_range = False
 
             if self.mode.is_ip_adapter and models.arch in [Arch.illu, Arch.illu_v]:
                 resid = resource_id(ResourceKind.clip_vision, Arch.illu, "ip_adapter")
@@ -182,7 +184,10 @@ class ControlLayer(QObject, ObservableProperties):
                     self.error_text = _("Not supported for") + f" {models.arch.value}"
             elif self.mode.is_control_net:
                 model = models.find_control(self.mode)
-                self.has_range = model == models.control.find(self.mode, True)
+                range_model = models.control.find(self.mode, True)
+                if models.arch is Arch.anima:
+                    range_model = range_model or models.model_patch.find(self.mode, True)
+                self.has_range = model == range_model
                 if model is None:
                     search_arch = Arch.illu if models.arch is Arch.illu_v else models.arch
                     search_path = (
