@@ -14,10 +14,18 @@ from ai_diffusion.backend.api import (
     WorkflowInput,
     WorkflowKind,
 )
-from ai_diffusion.backend.client import ClientEvent, resolve_arch
-from ai_diffusion.backend.comfy_client import ComfyClient, parse_url, websocket_url
+from ai_diffusion.backend.client import ClientEvent, ClientModels, resolve_arch
+from ai_diffusion.backend.comfy_client import (
+    ComfyClient,
+    _find_anima_ip_adapter_resources,
+    _find_anima_model_patch_resources,
+    _find_ip_adapters,
+    parse_url,
+    websocket_url,
+)
+from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
 from ai_diffusion.backend.network import NetworkError
-from ai_diffusion.backend.resources import ControlMode
+from ai_diffusion.backend.resources import ControlMode, ResourceKind, resource_id
 from ai_diffusion.backend.server import Server, ServerBackend, ServerState
 from ai_diffusion.files import File, FileFormat, FileLibrary
 from ai_diffusion.image import Extent
@@ -145,6 +153,76 @@ async def test_disconnect(comfy_server: Server):
 def test_parse_url(url, expected_http, expected_ws):
     parsed = parse_url(url)
     assert parsed == expected_http and websocket_url(parsed) == expected_ws
+
+
+def _node_options(name: str, values: list[str]):
+    return {"input": {"required": {name: [values]}}}
+
+
+def test_anima_model_patch_discovery_is_node_gated():
+    filenames = [
+        "anima-lllite-inpainting-v2.safetensors",
+        "anima-lllite-any-test-like-v2.safetensors",
+        "anima-lllite-scribble-1.safetensors",
+        "anima-lllite-lineart-1.safetensors",
+        "anima-lllite-depth-1.safetensors",
+        "anima-lllite-pose-1.safetensors",
+    ]
+    nodes = ComfyObjectInfo({
+        "ModelPatchLoader": _node_options("name", filenames),
+        "AnimaLLLiteApply": {},
+    })
+    discovered = _find_anima_model_patch_resources(nodes)
+    assert discovered == {
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint): filenames[0],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.universal): filenames[1],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.scribble): filenames[2],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.line_art): filenames[3],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.depth): filenames[4],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.pose): filenames[5],
+    }
+
+    assert not _find_anima_model_patch_resources(
+        ComfyObjectInfo({"ModelPatchLoader": _node_options("name", filenames)})
+    )
+    assert not _find_anima_model_patch_resources(ComfyObjectInfo({"AnimaLLLiteApply": {}}))
+
+
+def test_anima_ip_adapter_discovery_is_node_gated_and_exact():
+    filename = "ip_adapter-Character_Reference-10.safetensors"
+    id = resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)
+    nodes = ComfyObjectInfo({
+        "AnimaIPAdapterLoader": _node_options("ip_adapter_name", [filename]),
+        "AnimaIPAdapterApply": {},
+    })
+    assert _find_anima_ip_adapter_resources(nodes) == {id: filename}
+
+    incompatible = "ip_adapter-Character_Reference-10-old.safetensors"
+    nodes.nodes["AnimaIPAdapterLoader"] = _node_options("ip_adapter_name", [incompatible])
+    assert _find_anima_ip_adapter_resources(nodes) == {id: None}
+
+    assert not _find_anima_ip_adapter_resources(
+        ComfyObjectInfo({"AnimaIPAdapterLoader": _node_options("ip_adapter_name", [filename])})
+    )
+    assert not _find_anima_ip_adapter_resources(
+        ComfyObjectInfo({"IPAdapterModelLoader": _node_options("ipadapter_file", [filename])})
+    )
+    assert id not in _find_ip_adapters([filename])
+
+
+def test_anima_adapter_availability_is_reference_only():
+    models = ClientModels()
+    anima = models.for_arch(Arch.anima)
+    assert anima.find_control(ControlMode.reference) is None
+
+    filename = "ip_adapter-Character_Reference-10.safetensors"
+    models.resources[resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)] = (
+        filename
+    )
+    assert anima.find_control(ControlMode.reference) == filename
+    assert anima.find_control(ControlMode.face) is None
+    assert anima.find_control(ControlMode.style) is None
+    assert anima.find_control(ControlMode.composition) is None
 
 
 def check_client_info(client: ComfyClient):

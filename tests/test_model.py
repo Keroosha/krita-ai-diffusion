@@ -7,6 +7,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from krita import Document as MockKritaDocument
@@ -14,12 +16,13 @@ from krita import Krita, Selection
 from PyQt6.QtCore import QByteArray, Qt
 
 from ai_diffusion.backend.api import WorkflowInput, WorkflowKind
-from ai_diffusion.backend.client import CheckpointInfo, ClientEvent, ClientMessage
-from ai_diffusion.backend.resources import Arch, ControlMode
+from ai_diffusion.backend.client import CheckpointInfo, ClientEvent, ClientMessage, ClientModels
+from ai_diffusion.backend.resources import Arch, ControlMode, ResourceKind, resource_id
 from ai_diffusion.document import KritaDocument
 from ai_diffusion.image import BlendMode, Bounds, Extent, Image, ImageCollection
 from ai_diffusion.layer import Layer, LayerType
 from ai_diffusion.model.connection import Connection, ConnectionState
+from ai_diffusion.model.control import ControlLayer
 from ai_diffusion.model.custom_workflow import WorkflowCollection
 from ai_diffusion.model.jobs import Job, JobKind, JobParams, JobRegion, JobState
 from ai_diffusion.model.model import DocumentModel, ErrorKind, ProgressKind, no_error
@@ -742,3 +745,79 @@ async def test_apply_region_group(workflows_dir: Path):
         assert isinstance(r2_right, tuple) and r2_right[3] == 0, (
             "result2: right side must be transparent"
         )
+
+
+def test_anima_reference_control_preserves_source_aspect_ratio():
+    source_extent = Extent(320, 512)
+    layer = SimpleNamespace(
+        name="reference",
+        bounds=Bounds(0, 0, source_extent.width, source_extent.height),
+        get_pixels=lambda bounds, time: Image.create(source_extent),
+    )
+
+    def convert(arch: Arch):
+        control = SimpleNamespace(
+            layer=layer,
+            is_supported=True,
+            _model=SimpleNamespace(arch=arch, document=SimpleNamespace(extent=Extent(1024, 1024))),
+            mode=ControlMode.reference,
+            clip_vision_extent=Extent(224, 224),
+            strength=50,
+            strength_multiplier=50,
+            start=0.0,
+            end=1.0,
+        )
+        return ControlLayer.to_api(cast(Any, control))
+
+    anima = convert(Arch.anima)
+    sdxl = convert(Arch.sdxl)
+    assert anima.image is not None and anima.image.extent == source_extent
+    assert sdxl.image is not None and sdxl.image.extent == Extent(224, 224)
+
+
+def test_anima_control_capabilities_use_native_resources():
+    from ai_diffusion.model.root import root as plugin_root
+
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.line_art)] = (
+        "anima-lllite-lineart.safetensors"
+    )
+    models.resources[resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)] = (
+        "ip_adapter-Character_Reference-10.safetensors"
+    )
+    client = SimpleNamespace(
+        models=models,
+        features=SimpleNamespace(ip_adapter=True, max_control_layers=5),
+    )
+    previous_connection = getattr(plugin_root, "_connection", None)
+    root = cast(Any, plugin_root)
+    root._connection = SimpleNamespace(client_if_connected=client)
+
+    def update(mode: ControlMode):
+        control = SimpleNamespace(
+            _model=SimpleNamespace(arch=Arch.anima),
+            mode=mode,
+            has_range=True,
+            error_text="",
+            _index=0,
+        )
+        ControlLayer._update_is_supported(cast(Any, control))
+        return control
+
+    try:
+        line_art = update(ControlMode.line_art)
+        reference = update(ControlMode.reference)
+        face = update(ControlMode.face)
+        style = update(ControlMode.style)
+        composition = update(ControlMode.composition)
+    finally:
+        if previous_connection is None:
+            del root._connection
+        else:
+            root._connection = previous_connection
+
+    assert line_art.is_supported and line_art.has_range
+    assert reference.is_supported and not reference.has_range
+    assert not face.is_supported
+    assert not style.is_supported
+    assert not composition.is_supported
