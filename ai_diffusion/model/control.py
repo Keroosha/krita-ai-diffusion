@@ -13,6 +13,7 @@ from ..backend.resources import Arch, ControlMode, ResourceKind, resource_id
 from ..image import Bounds, Extent, Image
 from ..layer import Layer, LayerType
 from ..localization import translate as _
+from ..pose import Pose
 from ..util import PluginError
 from ..util import client_logger as log
 from . import jobs
@@ -145,6 +146,21 @@ class ControlLayer(QObject, ObservableProperties):
     def generate(self):
         self._generate_job = self._model.generate_control_layer(self)
         self.has_active_job = True
+
+    def import_pose(self, filepath: Path) -> None:
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            pose = Pose.from_open_pose_json(data)
+            if not pose.joints:
+                raise ValueError("OpenPose JSON contains no body keypoints")
+        except (OSError, ValueError) as error:
+            raise PluginError(_("Invalid OpenPose JSON") + f": {error}") from error
+
+        pose.scale(self._model.document.extent)
+        new_layer = self._model.layers.create_vector(
+            f"[Control] {ControlMode.pose.text}", pose.to_svg()
+        )
+        self.layer_id = new_layer.id
 
     def _update_is_supported(self):
         from .root import root

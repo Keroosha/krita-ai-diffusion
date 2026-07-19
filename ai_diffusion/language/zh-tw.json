@@ -595,6 +595,9 @@
     "Reset all parameters to their default values": "將所有參數重置為預設值",
     "Use ROCm (AMD GPU)": null,
     "Anime and illustration model with strong character rendering. Biased toward non-realistic artwork and not intended for realistic photography.": null,
-    "Anima models": null
+    "Anima models": null,
+    "Import pose from OpenPose JSON": null,
+    "Import Pose": null,
+    "Invalid OpenPose JSON": null
   }
 }

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import QMetaObject, Qt, pyqtSignal
 from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QSlider,
     QToolButton,
     QVBoxLayout,
@@ -78,6 +82,11 @@ class ControlWidget(QWidget):
         )
         self.add_pose_tool_button.clicked.connect(self._add_pose_character)
 
+        self.import_pose_tool_button = _create_import_pose_button(
+            self, Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        self.import_pose_tool_button.clicked.connect(self._import_pose)
+
         self.expand_button = QToolButton(self)
         self.expand_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.expand_button.setIcon(theme.icon("more"))
@@ -92,6 +101,7 @@ class ControlWidget(QWidget):
         bar_layout.addWidget(self.layer_select, 3)
         bar_layout.addWidget(self.generate_tool_button)
         bar_layout.addWidget(self.add_pose_tool_button)
+        bar_layout.addWidget(self.import_pose_tool_button)
         bar_layout.addWidget(self.preset_slider, 1)
         bar_layout.addWidget(self.error_text, 3)
         bar_layout.addWidget(self.expand_button)
@@ -134,6 +144,11 @@ class ControlWidget(QWidget):
         )
         self.add_pose_button.clicked.connect(self._add_pose_character)
 
+        self.import_pose_button = _create_import_pose_button(
+            self.extended_widget, Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.import_pose_button.clicked.connect(self._import_pose)
+
         self.custom_checkbox = QCheckBox(self.extended_widget)
         self.custom_checkbox.setText(_("Use custom values"))
         self.custom_checkbox.setChecked(control.use_custom_strength)
@@ -142,6 +157,7 @@ class ControlWidget(QWidget):
         actions_layout.addWidget(self.custom_checkbox, stretch=1)
         actions_layout.addWidget(self.generate_button)
         actions_layout.addWidget(self.add_pose_button)
+        actions_layout.addWidget(self.import_pose_button)
         extended_layout.addLayout(actions_layout)
 
         self.strength_slider = QSlider(self.extended_widget)
@@ -225,6 +241,19 @@ class ControlWidget(QWidget):
     def _add_pose_character(self):
         root.active_model.document.add_pose_character(self._control.layer)
 
+    def _import_pose(self):
+        filename, __ = QFileDialog.getOpenFileName(
+            self,
+            _("Import Pose"),
+            str(Path.home()),
+            "OpenPose JSON Files (*.json);;All Files (*)",
+        )
+        if filename:
+            try:
+                self._control.import_pose(Path(filename))
+            except Exception as error:
+                QMessageBox.critical(self, _("Error"), str(error))
+
     def _update_visibility(self):
         is_small = self.width() < 420
         is_pose = self._control.mode is ControlMode.pose
@@ -238,6 +267,8 @@ class ControlWidget(QWidget):
             self.generate_tool_button.setVisible(self._control.can_generate and not is_small)
             self.add_pose_button.setVisible(is_pose and is_small)
             self.add_pose_tool_button.setVisible(is_pose and not is_small)
+            self.import_pose_button.setVisible(is_pose and is_small)
+            self.import_pose_tool_button.setVisible(is_pose and not is_small)
             self.range_label.setVisible(self._control.has_range)
             self.range_slider.setVisible(self._control.has_range)
             self.range_start_label.setVisible(self._control.has_range)
@@ -273,6 +304,8 @@ class ControlWidget(QWidget):
         self.generate_button.setEnabled(not self._control.has_active_job)
         self.generate_tool_button.setEnabled(not self._control.has_active_job)
         self.layer_select.setEnabled(not self._control.has_active_job)
+        self.import_pose_button.setEnabled(not self._control.has_active_job)
+        self.import_pose_tool_button.setEnabled(not self._control.has_active_job)
 
     def _update_custom_values(self):
         self.preset_slider.setEnabled(not self._control.use_custom_strength)
@@ -314,6 +347,15 @@ def _create_add_pose_button(parent, style: Qt.ToolButtonStyle):
     button.setToolButtonStyle(style)
     button.setText(_("Add Skeleton"))
     button.setIcon(theme.icon("add-pose"))
+    return button
+
+
+def _create_import_pose_button(parent, style: Qt.ToolButtonStyle):
+    button = QToolButton(parent)
+    button.setToolButtonStyle(style)
+    button.setText(_("Import Pose"))
+    button.setIcon(theme.icon("import"))
+    button.setToolTip(_("Import pose from OpenPose JSON"))
     return button
 
 

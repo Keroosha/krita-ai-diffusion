@@ -4,6 +4,7 @@ and document data and forwards them as WorkflowInput to image generation clients
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +29,7 @@ from ai_diffusion.model.jobs import Job, JobKind, JobParams, JobRegion, JobState
 from ai_diffusion.model.model import DocumentModel, ErrorKind, ProgressKind, no_error
 from ai_diffusion.settings import ApplyBehavior, ApplyRegionBehavior
 from ai_diffusion.style import Style
+from ai_diffusion.util import PluginError
 
 from .conftest import qtapp
 from .mock.client import MockClient
@@ -773,6 +775,87 @@ def test_anima_reference_control_preserves_source_aspect_ratio():
     sdxl = convert(Arch.sdxl)
     assert anima.image is not None and anima.image.extent == source_extent
     assert sdxl.image is not None and sdxl.image.extent == Extent(224, 224)
+
+
+def test_control_layer_import_pose(tmp_path: Path):
+    filepath = tmp_path / "pose.json"
+    filepath.write_text(
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0, 0, 0, 10, 20, 1, 30, 40, 1] + [0, 0, 0] * 15}],
+        }),
+        encoding="utf-8",
+    )
+
+    created: list[tuple[str, str]] = []
+    new_layer_id = "new-pose-layer"
+
+    def create_vector(name: str, svg: str):
+        created.append((name, svg))
+        return SimpleNamespace(id=new_layer_id)
+
+    control = SimpleNamespace(
+        _model=SimpleNamespace(
+            document=SimpleNamespace(extent=Extent(200, 100)),
+            layers=SimpleNamespace(create_vector=create_vector),
+        ),
+        layer_id="previous-layer",
+    )
+
+    ControlLayer.import_pose(cast(Any, control), filepath)
+
+    assert control.layer_id == new_layer_id
+    assert len(created) == 1
+    name, svg = created[0]
+    assert name == "[Control] Pose"
+    assert 'width="200" height="100" viewBox="0 0 200 100"' in svg
+    assert '<circle id="P00_J01" cx="20.0" cy="10.0"' in svg
+    assert '<circle id="P00_J02" cx="60.0" cy="20.0"' in svg
+    assert '<line id="P00_B00" x1="20.0" y1="10.0" x2="60.0" y2="20.0"' in svg
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "",
+        "{",
+        "{}",
+        "[]",
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0] * 51}],
+        }),
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0] * 54}],
+        }),
+    ],
+)
+def test_control_layer_import_pose_invalid(tmp_path: Path, contents: str):
+    filepath = tmp_path / "pose.json"
+    filepath.write_text(contents, encoding="utf-8")
+    created: list[tuple[str, str]] = []
+
+    def create_vector(name: str, svg: str):
+        created.append((name, svg))
+        return SimpleNamespace(id="unexpected-layer")
+
+    control = SimpleNamespace(
+        _model=SimpleNamespace(
+            document=SimpleNamespace(extent=Extent(200, 100)),
+            layers=SimpleNamespace(create_vector=create_vector),
+        ),
+        layer_id="previous-layer",
+    )
+
+    with pytest.raises(PluginError, match="Invalid OpenPose JSON"):
+        ControlLayer.import_pose(cast(Any, control), filepath)
+
+    assert created == []
+    assert control.layer_id == "previous-layer"
 
 
 def test_anima_control_capabilities_use_native_resources():

@@ -75,6 +75,94 @@ def test_pose_from_json():
     assert pose.joints[JointIndex(1, 0)] == Point(-11, -12)
 
 
+def test_pose_from_json_list():
+    frame = {
+        "canvas_width": 100,
+        "canvas_height": 200,
+        "people": [
+            {
+                "pose_keypoints_2d": [10, 20, 1, 30, 40, 0.5] + [0, 0, 0] * 16,
+                "face_keypoints_2d": [1, 2, 0.9],
+                "hand_left_keypoints_2d": [3, 4, 0.8],
+                "hand_right_keypoints_2d": [5, 6, 0.7],
+                "animal_keypoints_2d": [7, 8, 0.6],
+            }
+        ],
+    }
+
+    direct = Pose.from_open_pose_json(frame)
+    wrapped = Pose.from_open_pose_json([frame])
+
+    assert wrapped.joints == direct.joints
+    assert wrapped.to_svg() == direct.to_svg()
+
+
+def test_pose_from_json_empty():
+    pose = Pose.from_open_pose_json({"canvas_width": 100, "canvas_height": 200, "people": []})
+
+    assert pose.people_count == 0
+    assert pose.extent == Extent(100, 200)
+    assert pose.joints == {}
+
+
+@pytest.mark.parametrize(
+    "data, message",
+    [
+        (None, "OpenPose JSON must contain a frame object"),
+        ([], "OpenPose JSON must contain a frame object"),
+        (
+            {"canvas_width": 0, "canvas_height": 200, "people": []},
+            "OpenPose JSON canvas dimensions must be positive integers",
+        ),
+        (
+            {"canvas_width": True, "canvas_height": 200, "people": []},
+            "OpenPose JSON canvas dimensions must be positive integers",
+        ),
+        (
+            {"canvas_width": 100.0, "canvas_height": 200, "people": []},
+            "OpenPose JSON canvas dimensions must be positive integers",
+        ),
+        (
+            {"canvas_width": 100, "canvas_height": 200, "people": {}},
+            "OpenPose JSON 'people' must be a list",
+        ),
+        (
+            {"canvas_width": 100, "canvas_height": 200, "people": [[]]},
+            "OpenPose JSON person must be an object",
+        ),
+        (
+            {
+                "canvas_width": 100,
+                "canvas_height": 200,
+                "people": [{"pose_keypoints_2d": [0] * 51}],
+            },
+            "OpenPose JSON 'pose_keypoints_2d' must contain 54 finite numbers",
+        ),
+        (
+            {
+                "canvas_width": 100,
+                "canvas_height": 200,
+                "people": [{"pose_keypoints_2d": [0] * 53 + [float("inf")]}],
+            },
+            "OpenPose JSON 'pose_keypoints_2d' must contain 54 finite numbers",
+        ),
+        (
+            {
+                "canvas_width": 100,
+                "canvas_height": 200,
+                "people": [{"pose_keypoints_2d": [0] * 53 + [True]}],
+            },
+            "OpenPose JSON 'pose_keypoints_2d' must contain 54 finite numbers",
+        ),
+    ],
+)
+def test_pose_from_json_invalid(data, message):
+    with pytest.raises(ValueError) as error:
+        Pose.from_open_pose_json(data)
+
+    assert str(error.value) == message
+
+
 def test_pose_to_svg():
     joints = {
         JointIndex(0, 0): Point(11, 12),
