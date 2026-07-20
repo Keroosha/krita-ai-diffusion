@@ -269,7 +269,7 @@ class ComfyWorkflow:
         return id
 
     def _add_image_hashed(self, image: Image):
-        data = image.to_bytes()
+        data = image.to_bytes().data()
         hash = zlib.crc32(data)
         id = f"{hash:08x}"
         self.image_data[id] = data
@@ -541,6 +541,14 @@ class ComfyWorkflow:
     def load_ip_adapter(self, ipadapter_file: str):
         return self.add_cached("IPAdapterModelLoader", 1, ipadapter_file=ipadapter_file)
 
+    def load_anima_ip_adapter(self, ip_adapter_name: str):
+        return self.add_cached(
+            "AnimaIPAdapterLoader",
+            1,
+            ip_adapter_name=ip_adapter_name,
+            auto_download=False,
+        )
+
     def load_upscale_model(self, model_name: str):
         return self.add_cached("UpscaleModelLoader", 1, model_name=model_name)
 
@@ -788,21 +796,18 @@ class ComfyWorkflow:
             )
         )
 
-    def apply_controlnet_lllite(
+    def apply_anima_lllite(
         self,
         model: Output,
-        lllite_name: str,
+        model_patch: Output,
         image: Output,
         strength=1.0,
         range: tuple[float, float] = (0.0, 1.0),
         mask: Output | None = None,
     ):
-        model, control_net = self.add_cached(
-            "ETN_control_load", 2, model=model, weights=lllite_name
-        )
         inputs = {
             "model": model,
-            "control_net": control_net,
+            "model_patch": model_patch,
             "image": image,
             "strength": strength,
             "start_percent": range[0],
@@ -810,7 +815,7 @@ class ComfyWorkflow:
         }
         if mask is not None:
             inputs["mask"] = mask
-        return self.add("ETN_control_apply", 1, **inputs)
+        return self.add("AnimaLLLiteApply", 1, **inputs)
 
     def set_controlnet_type(self, controlnet: Output, mode: ControlMode):
         match mode:
@@ -863,6 +868,28 @@ class ComfyWorkflow:
             inpaint_image=image if mask else None,
             mask=mask,
             strength=strength,
+        )
+
+    def apply_anima_ip_adapter(
+        self,
+        model: Output,
+        ip_adapter: Output,
+        image: Output,
+        strength: float,
+    ):
+        return self.add(
+            "AnimaIPAdapterApply",
+            1,
+            model=model,
+            ip_adapter=ip_adapter,
+            ref_image=image,
+            strength=strength,
+            ref_image_size=512,
+            siglip_layer=-1,
+            ip_cfg_scale=4.0,
+            ip_cfg_separate=False,
+            gray_null=False,
+            use_lora=True,
         )
 
     def encode_ip_adapter(

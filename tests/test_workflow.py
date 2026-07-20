@@ -8,6 +8,7 @@ import pytest
 
 from ai_diffusion.backend import workflow
 from ai_diffusion.backend.api import (
+    CheckpointInput,
     ConditioningInput,
     ControlInput,
     CustomWorkflowInput,
@@ -18,23 +19,30 @@ from ai_diffusion.backend.api import (
     LoraInput,
     RegionInput,
     SamplingInput,
+    TaggerInput,
     UpscaleInput,
     WorkflowInput,
     WorkflowKind,
 )
-from ai_diffusion.backend.client import CheckpointInfo, Client, ClientEvent, ClientModels
+from ai_diffusion.backend.client import (
+    CheckpointInfo,
+    Client,
+    ClientEvent,
+    ClientModels,
+    TextOutput,
+)
 from ai_diffusion.backend.cloud_client import CloudClient
 from ai_diffusion.backend.comfy_client import ComfyClient
 from ai_diffusion.backend.comfy_workflow import ComfyWorkflow
 from ai_diffusion.backend.resources import ControlMode, ResourceKind, resource_id
 from ai_diffusion.backend.workflow import detect_inpaint
-from ai_diffusion.files import File, FileCollection, FileLibrary, FileSource
+from ai_diffusion.files import File, FileCollection, FileFormat, FileLibrary, FileSource
 from ai_diffusion.image import Bounds, Extent, Image, ImageCollection, Mask
 from ai_diffusion.pose import Pose
 from ai_diffusion.settings import PerformanceSettings
 from ai_diffusion.style import Arch, Style
 from ai_diffusion.text import extract_layers
-from ai_diffusion.util import ensure
+from ai_diffusion.util import PluginError, ensure
 
 from . import config
 from .config import default_checkpoint, image_dir, reference_dir, result_dir, root_dir, test_dir
@@ -202,6 +210,65 @@ def automatic_inpaint(
     return params
 
 
+def test_tagger_workflow():
+    image = Image.create(Extent(64, 48))
+    params = TaggerInput(
+        model="wd-v1-4-convnext-tagger-v2",
+        threshold=0.42,
+        character_threshold=0.73,
+        replace_underscore=True,
+        trailing_comma=True,
+        exclude_tags="lowres, watermark",
+    )
+
+    graph = workflow.create(workflow.prepare_tagger(image, params), ClientModels())
+    load_image = next(graph.find("ETN_LoadImageCache"))
+    tagger = next(graph.find("WD14Tagger|pysssss"))
+
+    assert graph.node_count == 2
+    assert tagger.inputs == {
+        "image": load_image.output(0),
+        "model": "wd-v1-4-convnext-tagger-v2",
+        "threshold": 0.42,
+        "character_threshold": 0.73,
+        "replace_underscore": True,
+        "trailing_comma": True,
+        "exclude_tags": "lowres, watermark",
+    }
+
+
+def test_tagger_execute(qtapp, local_client: ComfyClient):
+    models = local_client.models.node_inputs.options("WD14Tagger|pysssss", "model")
+    if len(models) == 0:
+        pytest.skip("comfyui-wd14-tagger is not installed")
+    work = workflow.prepare_tagger(
+        Image.load(image_dir / "cat.webp"),
+        TaggerInput(model=models[0], threshold=0.35, character_threshold=0.85),
+    )
+
+    async def run():
+        job_id = None
+        result = None
+        messages = local_client.listen()
+        async for message in messages:
+            if job_id is None:
+                job_id = await local_client.enqueue(work)
+            if message.job_id != job_id:
+                continue
+            if message.event is ClientEvent.output:
+                assert isinstance(message.result, TextOutput)
+                result = message.result.text
+            elif message.event is ClientEvent.error:
+                raise RuntimeError(message.error)
+            elif message.event is ClientEvent.finished:
+                assert result is not None
+                return result
+        assert False, "Connection closed without receiving tags"
+
+    tags = qtapp.run(run())
+    assert isinstance(tags, str)
+
+
 def test_inpaint_params():
     bounds = Bounds(0, 0, 100, 100)
     no_cond = ConditioningInput("")
@@ -231,36 +298,306 @@ def test_inpaint_params():
     assert g.fill is FillMode.blur and g.use_inpaint_model
 
 
-def test_anima_lllite_control_workflow():
+def test_anima_inpaint_model_patch_satisfies_validation():
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint)] = (
+        "anima-lllite-inpainting-v2.safetensors"
+    )
+    inpaint = InpaintParams(
+        InpaintMode.fill,
+        Bounds(0, 0, 100, 100),
+        use_inpaint_model=True,
+    )
+
+    workflow._check_inpaint_model(inpaint, Arch.anima, models)
+
+
+def test_anima_base_workflow_uses_official_loader_contract():
+    filename = "anima-base-v1.0.safetensors"
+    models = ClientModels()
+    models.checkpoints[filename] = CheckpointInfo(filename, Arch.anima, format=FileFormat.diffusion)
+    models.resources[resource_id(ResourceKind.text_encoder, Arch.anima, "qwen_3_06b")] = (
+        "qwen_3_06b_base.safetensors"
+    )
+    models.resources[resource_id(ResourceKind.vae, Arch.anima, "default")] = (
+        "qwen_image_vae.safetensors"
+    )
+    w = ComfyWorkflow()
+
+    _, clip, _ = workflow.load_checkpoint_with_lora(
+        w, CheckpointInput(filename, Arch.anima), models
+    )
+    latent = w.empty_latent_image(Extent(1024, 1024), Arch.anima)
+
+    clip_loader = next(node for node in w.root.values() if node["class_type"] == "CLIPLoader")
+    latent_node = w.root[str(latent.node)]
+    assert clip.arch is Arch.anima
+    assert clip_loader["inputs"] == {
+        "clip_name": "qwen_3_06b_base.safetensors",
+        "type": "stable_diffusion",
+    }
+    assert latent_node["class_type"] == "EmptyLatentImage"
+    assert latent_node["inputs"] == {"width": 1024, "height": 1024, "batch_size": 1}
+    assert not any(node["class_type"] == "EmptySD3LatentImage" for node in w.root.values())
+
+
+def _anima_control_workflow(
+    mode: ControlMode,
+    patch_mode: ControlMode,
+    mask: workflow.ImageOutput | None = None,
+):
     w = ComfyWorkflow()
     models = ClientModels()
-    models.resources[resource_id(ResourceKind.controlnet, Arch.anima, ControlMode.universal)] = (
-        "anima-lllite-anytest.safetensors"
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, patch_mode)] = (
+        f"anima-lllite-{patch_mode.name}.safetensors"
     )
-    cond = workflow.ConditioningOutput(workflow.Output(2, 0), workflow.Output(3, 0))
+    cond = workflow.ConditioningOutput(workflow.Output(91, 0), workflow.Output(92, 0))
     control = workflow.Control(
-        ControlMode.blur,
-        workflow.ImageOutput(Image.create(Extent(16, 16))),
+        mode,
+        workflow.ImageOutput(workflow.Output(93, 0)),
+        mask,
         strength=0.5,
         range=(0.1, 0.8),
     )
 
     model, result = workflow.apply_control(
         w,
-        workflow.Output(1, 0),
+        workflow.Output(90, 0),
         cond,
         [control],
         Extent(64, 64),
-        workflow.Output(4, 0),
+        workflow.Output(94, 0),
+        models.for_arch(Arch.anima),
+    )
+    loader_id, loader = next(
+        (id, node) for id, node in w.root.items() if node["class_type"] == "ModelPatchLoader"
+    )
+    apply = w.root[str(model.node)]
+    return w, result, cond, loader_id, loader, apply
+
+
+@pytest.mark.parametrize(
+    "mode,patch_mode",
+    [
+        (ControlMode.blur, ControlMode.universal),
+        (ControlMode.scribble, ControlMode.universal),
+        (ControlMode.line_art, ControlMode.universal),
+        (ControlMode.depth, ControlMode.depth),
+        (ControlMode.pose, ControlMode.pose),
+    ],
+)
+def test_anima_structural_control_uses_native_lllite(mode: ControlMode, patch_mode: ControlMode):
+    w, result, cond, loader_id, loader, apply = _anima_control_workflow(mode, patch_mode)
+
+    assert result == cond
+    assert loader["inputs"]["name"] == f"anima-lllite-{patch_mode.name}.safetensors"
+    assert apply["class_type"] == "AnimaLLLiteApply"
+    expected_image = ["93", 0]
+    if mode.is_lines:
+        image_id = apply["inputs"]["image"][0]
+        image_node = w.root[image_id]
+        assert image_node["class_type"] == "ImageInvert"
+        assert image_node["inputs"]["image"] == expected_image
+        expected_image = [image_id, 0]
+    assert apply["inputs"] == {
+        "model": ["90", 0],
+        "model_patch": [loader_id, 0],
+        "image": expected_image,
+        "strength": 0.5,
+        "start_percent": 0.1,
+        "end_percent": 0.8,
+    }
+    assert not any(
+        node["class_type"].startswith("ETN_control") or node["class_type"] == "ControlNetLoader"
+        for node in w.root.values()
+    )
+
+
+@pytest.mark.parametrize("mode", [ControlMode.inpaint, ControlMode.depth, ControlMode.pose])
+def test_anima_universal_patch_does_not_substitute_specialized_hints(mode: ControlMode):
+    with pytest.raises(RuntimeError, match=f"Model patch not found for mode {mode}"):
+        _anima_control_workflow(mode, ControlMode.universal)
+
+
+def test_anima_multiple_model_patches_are_chained():
+    w = ComfyWorkflow()
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.universal)] = (
+        "anima-lllite-universal.safetensors"
+    )
+    cond = workflow.ConditioningOutput(workflow.Output(91, 0), workflow.Output(92, 0))
+    controls = [
+        workflow.Control(ControlMode.blur, workflow.ImageOutput(workflow.Output(93, 0))),
+        workflow.Control(ControlMode.line_art, workflow.ImageOutput(workflow.Output(94, 0))),
+    ]
+
+    model, result = workflow.apply_control(
+        w,
+        workflow.Output(90, 0),
+        cond,
+        controls,
+        Extent(64, 64),
+        workflow.Output(95, 0),
         models.for_arch(Arch.anima),
     )
 
+    applies = [
+        (id, node) for id, node in w.root.items() if node["class_type"] == "AnimaLLLiteApply"
+    ]
     assert result == cond
-    assert w.root[str(model.node)]["class_type"] == "ETN_control_apply"
-    assert w.root[str(model.node)]["inputs"]["control_net"] == [str(model.node - 1), 1]
-    assert w.root[str(model.node - 1)]["inputs"]["weights"] == "anima-lllite-anytest.safetensors"
-    assert any(n["class_type"] == "ETN_control_load" for n in w.root.values())
-    assert not any(n["class_type"] == "ControlNetLoader" for n in w.root.values())
+    assert len(applies) == 2
+    assert applies[0][1]["inputs"]["model"] == ["90", 0]
+    assert applies[1][1]["inputs"]["model"] == [applies[0][0], 0]
+    assert model.node == int(applies[1][0])
+    assert sum(node["class_type"] == "ModelPatchLoader" for node in w.root.values()) == 1
+
+
+def test_anima_regional_universal_patch_remains_global():
+    control = workflow.Control(ControlMode.blur, workflow.ImageOutput(workflow.Output(93, 0)))
+    region = workflow.Region(
+        workflow.ImageOutput(workflow.Output(95, 0), is_mask=True),
+        Bounds(0, 0, 64, 64),
+        workflow.TextPrompt("", ""),
+        control=[control],
+    )
+    conditioning = workflow.Conditioning(workflow.TextPrompt("", ""), None, regions=[region])
+    w = ComfyWorkflow()
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.universal)] = (
+        "anima-lllite-universal.safetensors"
+    )
+
+    model, _ = workflow.apply_control(
+        w,
+        workflow.Output(90, 0),
+        workflow.ConditioningOutput(workflow.Output(91, 0), workflow.Output(92, 0)),
+        conditioning.all_control,
+        Extent(64, 64),
+        workflow.Output(94, 0),
+        models.for_arch(Arch.anima),
+    )
+
+    apply = w.root[str(model.node)]
+    assert apply["class_type"] == "AnimaLLLiteApply"
+    assert "mask" not in apply["inputs"]
+
+
+def test_anima_inpaint_control_preserves_native_mask():
+    mask = workflow.ImageOutput(workflow.Output(95, 0), is_mask=True)
+    _, result, cond, _, loader, apply = _anima_control_workflow(
+        ControlMode.inpaint, ControlMode.inpaint, mask
+    )
+
+    assert result == cond
+    assert loader["inputs"]["name"] == "anima-lllite-inpaint.safetensors"
+    assert apply["class_type"] == "AnimaLLLiteApply"
+    assert apply["inputs"]["image"] == ["93", 0]
+    assert apply["inputs"]["mask"] == ["95", 0]
+    assert apply["inputs"]["strength"] == 0.5
+    assert apply["inputs"]["start_percent"] == 0.1
+    assert apply["inputs"]["end_percent"] == 0.8
+
+
+def _anima_reference_control(mode: ControlMode = ControlMode.reference, strength: float = 0.65):
+    return workflow.Control(
+        mode,
+        workflow.ImageOutput(Image.create(Extent(320, 512))),
+        strength=strength,
+    )
+
+
+def _anima_reference_models():
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)] = (
+        "ip_adapter-Character_Reference-10.safetensors"
+    )
+    return models.for_arch(Arch.anima)
+
+
+def test_anima_reference_uses_dedicated_adapter_and_preserves_aspect_ratio():
+    w = ComfyWorkflow()
+    model = workflow.apply_ip_adapter(
+        w,
+        workflow.Output(90, 0),
+        [_anima_reference_control()],
+        _anima_reference_models(),
+    )
+    cached = w.load_anima_ip_adapter("ip_adapter-Character_Reference-10.safetensors")
+    graph = w.embed_images().root
+
+    loader_id, loader = next(
+        (id, node) for id, node in graph.items() if node["class_type"] == "AnimaIPAdapterLoader"
+    )
+    image_id, image = next(
+        (id, node) for id, node in graph.items() if node["class_type"] == "ETN_LoadImageBase64"
+    )
+    apply = graph[str(model.node)]
+    assert loader["inputs"] == {
+        "ip_adapter_name": "ip_adapter-Character_Reference-10.safetensors",
+        "auto_download": False,
+    }
+    assert cached.node == int(loader_id)
+    assert sum(node["class_type"] == "AnimaIPAdapterLoader" for node in graph.values()) == 1
+    assert apply["class_type"] == "AnimaIPAdapterApply"
+    assert apply["inputs"] == {
+        "model": ["90", 0],
+        "ip_adapter": [loader_id, 0],
+        "ref_image": [image_id, 0],
+        "strength": 0.65,
+        "ref_image_size": 512,
+        "siglip_layer": -1,
+        "ip_cfg_scale": 4.0,
+        "ip_cfg_separate": False,
+        "gray_null": False,
+        "use_lora": True,
+    }
+    assert Image.from_base64(image["inputs"]["image"]).extent == Extent(320, 512)
+    assert not any("Scale" in node["class_type"] for node in graph.values())
+    standard_nodes = {
+        "IPAdapterModelLoader",
+        "CLIPVisionLoader",
+        "IPAdapterAdvanced",
+        "IPAdapterEmbeds",
+    }
+    assert not any(node["class_type"] in standard_nodes for node in graph.values())
+
+
+def test_anima_reference_fails_when_adapter_is_missing():
+    with pytest.raises(PluginError, match="not found"):
+        workflow.apply_ip_adapter(
+            ComfyWorkflow(),
+            workflow.Output(90, 0),
+            [_anima_reference_control()],
+            ClientModels().for_arch(Arch.anima),
+        )
+
+
+def test_anima_reference_rejects_multiple_and_regional_controls():
+    controls = [_anima_reference_control(), _anima_reference_control()]
+    with pytest.raises(RuntimeError, match="exactly one Reference"):
+        workflow.apply_ip_adapter(
+            ComfyWorkflow(), workflow.Output(90, 0), controls, _anima_reference_models()
+        )
+
+    with pytest.raises(RuntimeError, match="Regional Anima Reference"):
+        workflow.apply_ip_adapter(
+            ComfyWorkflow(),
+            workflow.Output(90, 0),
+            [_anima_reference_control()],
+            _anima_reference_models(),
+            mask=workflow.Output(95, 0),
+        )
+
+
+@pytest.mark.parametrize("mode", [ControlMode.face, ControlMode.style, ControlMode.composition])
+def test_anima_rejects_incompatible_adapter_modes(mode: ControlMode):
+    with pytest.raises(RuntimeError, match="not supported for Anima"):
+        workflow.apply_ip_adapter(
+            ComfyWorkflow(),
+            workflow.Output(90, 0),
+            [_anima_reference_control(mode)],
+            _anima_reference_models(),
+        )
 
 
 def test_prepare_lora():
@@ -871,6 +1208,50 @@ def test_create_open_pose_vector(qtapp, client: Client):
         assert False, "Connection closed without receiving images"
 
     qtapp.run(main())
+
+
+def _require_local_anima(client: Client, reference=False):
+    checkpoint = default_checkpoint[Arch.anima]
+    if checkpoint not in client.models.checkpoints:
+        pytest.skip(f"Optional Anima checkpoint is not installed: {checkpoint}")
+    required = [
+        resource_id(ResourceKind.text_encoder, Arch.anima, "qwen_3_06b"),
+        resource_id(ResourceKind.vae, Arch.anima, "default"),
+    ]
+    if reference:
+        required.append(resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference))
+    missing = [id for id in required if not client.models.resources.get(id)]
+    if missing:
+        pytest.skip(f"Optional Anima resources are not installed: {', '.join(missing)}")
+
+
+def test_anima_base_generation(qtapp, local_client):
+    _require_local_anima(local_client)
+    job = create(
+        WorkflowKind.generate,
+        local_client,
+        canvas=Extent(512, 512),
+        cond=ConditioningInput("anime character, detailed illustration"),
+        style=default_style(local_client, Arch.anima),
+    )
+    run_and_save(qtapp, local_client, job, "test_anima_base_generation")
+
+
+def test_anima_character_reference(qtapp, local_client):
+    _require_local_anima(local_client, reference=True)
+    reference = Image.load(image_dir / "cat.webp")
+    cond = ConditioningInput(
+        "anime character in a garden",
+        control=[ControlInput(ControlMode.reference, reference, 0.65)],
+    )
+    job = create(
+        WorkflowKind.generate,
+        local_client,
+        canvas=Extent(512, 512),
+        cond=cond,
+        style=default_style(local_client, Arch.anima),
+    )
+    run_and_save(qtapp, local_client, job, "test_anima_character_reference")
 
 
 @pytest.mark.parametrize("sdver", [Arch.sd15, Arch.sdxl])

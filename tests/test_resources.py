@@ -2,7 +2,16 @@ import json
 from itertools import chain
 
 import ai_diffusion.backend.resources as res
-from ai_diffusion.backend.resources import Arch, ModelResource
+from ai_diffusion.backend.resolution import CheckpointResolution
+from ai_diffusion.backend.resources import (
+    Arch,
+    ControlMode,
+    ModelRequirements,
+    ModelResource,
+    ResourceId,
+    ResourceKind,
+)
+from ai_diffusion.image import Extent
 
 from .config import result_dir
 
@@ -53,10 +62,87 @@ def test_resource_ids_exist():
             Arch.qwen_e,
             Arch.qwen_e_p,
             Arch.flux2_9b,
-            Arch.anima,
             Arch.ernie,
             Arch.krea2,
         ):
             continue  # no model downloads yet
         model = res.find_resource(resource_id)
         assert model is not None, f"Resource ID {resource_id} not found"
+
+
+def test_anima_architecture_and_resolution():
+    assert Arch.from_string("anima") is Arch.anima
+    assert Arch.from_string("unknown", filename="models/anima-base-v1.0.safetensors") is Arch.anima
+
+    resolution = CheckpointResolution.compute(Extent(1024, 1024), Arch.anima)
+    assert resolution == CheckpointResolution(512, 1536, 0.5, 1.5)
+
+
+def test_anima_managed_resources():
+    expected = {
+        ResourceId(ResourceKind.checkpoint, Arch.anima, "base"): (
+            "anima-base-v1.0.safetensors",
+            "bd43b7cffe1ed1153d9c41e7beb2f18cb1273eafbaa3af3edd6a173dc90a006e",
+        ),
+        ResourceId(ResourceKind.text_encoder, Arch.anima, "qwen_3_06b"): (
+            "qwen_3_06b_base.safetensors",
+            "cd2a512003e2f9f3cd3c32a9c3573f820bb28c940f73c57b1ddaa983d9223eba",
+        ),
+        ResourceId(ResourceKind.vae, Arch.anima, "default"): (
+            "qwen_image_vae.safetensors",
+            "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        ),
+        ResourceId(ResourceKind.model_patch, Arch.anima, ControlMode.universal): (
+            "anima-lllite-any-test-like-v2.safetensors",
+            "8863424f04a2445815a827b22cbda557a085d2752e05fab54a2b303821a9e3b2",
+        ),
+        ResourceId(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint): (
+            "anima-lllite-inpainting-v2.safetensors",
+            "5242e677d2be34ee70ca7c97c3b14ff5ee49838c03fc1e60ac4852a180db6ef5",
+        ),
+    }
+    for id, (filename, sha256) in expected.items():
+        model = res.get_resource(id)
+        assert model.filename == filename
+        assert model.files[0].sha256 == sha256
+
+    adapter = res.get_resource(
+        ResourceId(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)
+    )
+    assert adapter.requirements is ModelRequirements.cuda
+    assert [str(file.path) for file in adapter.files] == [
+        "models/ipadapter/ip_adapter-Character_Reference-10.safetensors",
+        "models/siglip2/siglip2-base-patch16-512/config.json",
+        "models/siglip2/siglip2-base-patch16-512/model.safetensors",
+    ]
+    assert [file.sha256 for file in adapter.files] == [
+        "dc9612cc28b55f00ba39f6169bfe4871130be028a55682ab54dd51360acb8232",
+        "a15bc39fbcd92498dea6d5d3cb2b0d8b9ba389d6a3f2b565ea66128a2d141934",
+        "fe0e601c625e69eed8e73500d39e9b6164403fe03db8048e87913c3cefbbb3fe",
+    ]
+
+
+def test_anima_search_paths_and_custom_node():
+    modes = [
+        ControlMode.inpaint,
+        ControlMode.universal,
+        ControlMode.scribble,
+        ControlMode.line_art,
+        ControlMode.depth,
+        ControlMode.pose,
+    ]
+    assert all(res.search_path(ResourceKind.model_patch, Arch.anima, mode) for mode in modes)
+    assert all(res.search_path(ResourceKind.controlnet, Arch.anima, mode) is None for mode in modes)
+    universal = res.search_path(ResourceKind.model_patch, Arch.anima, ControlMode.universal)
+    inpaint = res.search_path(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint)
+    assert universal is not None and universal[0] == "anima-lllite-any-test-like-v2"
+    assert inpaint is not None and inpaint[0] == "anima-lllite-inpainting-v2"
+    assert res.search_path(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference) == [
+        "ip_adapter-character_reference-10"
+    ]
+
+    assert all(node.name != "Anima IP-Adapter" for node in res.required_custom_nodes)
+    node = next(node for node in res.optional_custom_nodes if node.name == "Anima IP-Adapter")
+    assert node.version == "3813b8c8a655e1a1860b45d9a84ed43383528074"
+    assert node.nodes == ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"]
+    assert res.comfy_version == "4800e78518ebb1f2a9443ea5418edbff6c3935f9"

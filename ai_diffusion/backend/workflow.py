@@ -34,6 +34,7 @@ from .api import (
     LoraInput,
     RegionInput,
     SamplingInput,
+    TaggerInput,
     UpscaleInput,
     WorkflowInput,
     WorkflowKind,
@@ -170,7 +171,7 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
             case Arch.qwen | Arch.qwen_e | Arch.qwen_e_p | Arch.qwen_l:
                 clip = w.load_clip(te["qwen"], type="qwen_image")
             case Arch.anima:
-                clip = w.load_clip(te["qwen_3_06b"], type="omnigen2")
+                clip = w.load_clip(te["qwen_3_06b"], type="stable_diffusion")
             case Arch.zimage:
                 clip = w.load_clip(te["qwen_3_4b"], type="lumina2")
             case Arch.ernie:
@@ -583,13 +584,14 @@ def apply_control(
             image = w.invert_image(image)
 
         if models.arch is Arch.anima:
-            if cn_model := models.find(control.mode, allow_universal=True):
+            if patch_name := patches.find(control.mode, allow_universal=True):
+                patch = w.load_model_patch(patch_name)
                 mask = control.mask.load(w) if control.mask is not None else None
-                model = w.apply_controlnet_lllite(
-                    model, cn_model, image, control.strength, control.range, mask
+                model = w.apply_anima_lllite(
+                    model, patch, image, control.strength, control.range, mask
                 )
                 continue
-            raise RuntimeError(f"ControlNet model not found for mode {control.mode}")
+            raise RuntimeError(f"Model patch not found for mode {control.mode}")
 
         if cn_model := models.find(control.mode):
             controlnet = w.load_controlnet(cn_model)
@@ -663,6 +665,28 @@ def apply_ip_adapter(
     models: ModelDict,
     mask: Output | None = None,
 ):
+    if models.arch is Arch.anima:
+        unsupported = [
+            c
+            for c in control_layers
+            if c.mode.is_ip_adapter and c.mode is not ControlMode.reference
+        ]
+        if unsupported:
+            raise RuntimeError(f"{unsupported[0].mode.text} is not supported for Anima")
+
+        references = [c for c in control_layers if c.mode is ControlMode.reference]
+        if not references:
+            return model
+        if mask is not None:
+            raise RuntimeError("Regional Anima Reference controls are not supported")
+        if len(references) > 1:
+            raise RuntimeError("Anima supports exactly one Reference control layer")
+
+        control = references[0]
+        ip_adapter = w.load_anima_ip_adapter(models.ip_adapter[ControlMode.reference])
+        image = control.image.load(w)
+        return w.apply_anima_ip_adapter(model, ip_adapter, image, control.strength)
+
     if not (models.arch is Arch.sd15 or models.arch.is_sdxl_like):
         return model
 
@@ -1771,6 +1795,27 @@ def prepare_upscale_simple(image: Image, model: str, factor: float):
     return i
 
 
+def prepare_tagger(image: Image, params: TaggerInput):
+    images = ImageInput.from_extent(image.extent)
+    images.initial_image = image
+    return WorkflowInput(WorkflowKind.tag, images=images, tagger=params)
+
+
+def tag_image(workflow: ComfyWorkflow, image: Image, params: TaggerInput):
+    workflow.add(
+        "WD14Tagger|pysssss",
+        1,
+        image=workflow.load_image(image),
+        model=params.model,
+        threshold=params.threshold,
+        character_threshold=params.character_threshold,
+        replace_underscore=params.replace_underscore,
+        trailing_comma=params.trailing_comma,
+        exclude_tags=params.exclude_tags,
+    )
+    return workflow
+
+
 def prepare_create_control_image(
     image: Image,
     mode: ControlMode,
@@ -1864,6 +1909,8 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             bounds=i.inpaint.target_bounds if i.inpaint else None,
             seed=i.sampling.seed if i.sampling else -1,
         )
+    elif i.kind is WorkflowKind.tag:
+        return tag_image(workflow, i.image, ensure(i.tagger))
     elif i.kind is WorkflowKind.custom:
         seed = ensure(i.sampling).seed
         return expand_custom(
@@ -1983,7 +2030,10 @@ def _check_server_has_models(
 def _check_inpaint_model(inpaint: InpaintParams | None, arch: Arch, models: ClientModels):
     if inpaint and inpaint.use_inpaint_model:
         res_id: ResourceId | None = None
-        if arch.has_controlnet_inpaint:
+        if arch is Arch.anima:
+            if models.for_arch(arch).model_patch.find(ControlMode.inpaint) is None:
+                res_id = ResourceId(ResourceKind.model_patch, arch, ControlMode.inpaint)
+        elif arch.has_controlnet_inpaint:
             if arch in (Arch.flux, Arch.zimage):
                 return  # Optional for now
             if models.for_arch(arch).control.find(ControlMode.inpaint) is None:

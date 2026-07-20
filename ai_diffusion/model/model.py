@@ -11,10 +11,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, NamedTuple
+from typing import Any, ClassVar, NamedTuple
 
-from PyQt5.QtCore import QMetaObject, QObject, Qt, QUuid, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QPainter
+from PyQt6.QtCore import QMetaObject, QObject, Qt, QUuid, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QPainter
 
 from .. import eventloop, util
 from ..backend import resolution, workflow
@@ -28,6 +28,7 @@ from ..backend.api import (
     InpaintMode,
     InpaintParams,
     SamplingInput,
+    TaggerInput,
     UpscaleInput,
     WorkflowInput,
     WorkflowKind,
@@ -37,6 +38,7 @@ from ..backend.client import (
     ClientEvent,
     ClientMessage,
     ClientOutput,
+    TextOutput,
     filter_supported_styles,
     is_style_supported,
     resolve_arch,
@@ -86,6 +88,7 @@ class Workspace(Enum):
     live = 2
     animation = 3
     custom = 4
+    tagger = 5
 
 
 class ProgressKind(Enum):
@@ -176,6 +179,7 @@ class DocumentModel(QObject, ObservableProperties):
         self.upscale = UpscaleWorkspace(self)
         self.live = LiveWorkspace(self)
         self.animation = AnimationWorkspace(self)
+        self.tagger = TaggerWorkspace(self)
         self.custom = CustomWorkspace(workflows, self._generate_custom, self.jobs)
         self._style_connection: QMetaObject.Connection | None = None
 
@@ -436,6 +440,41 @@ class DocumentModel(QObject, ObservableProperties):
         self._doc.resize(job.params.bounds.extent)
         self.upscale.target_extent_changed.emit(self.upscale.target_extent)
 
+    def tag_image(self):
+        self.tagger.refresh_models()
+        if not self.tagger.is_available:
+            msg = _("The WD14 Tagger node is not installed or has an incompatible input contract")
+            self.report_error(Error(ErrorKind.warning, msg))
+            return
+        if not self.tagger.can_tag:
+            return
+
+        try:
+            selection = self._doc.selection_bounds
+            bounds = Bounds.clamp(selection, self._doc.extent) if selection is not None else None
+            if bounds is None or bounds.is_zero:
+                bounds = Bounds.from_extent(self._doc.extent)
+            image = self._get_current_image(bounds, exclude_internal=False)
+            input = workflow.prepare_tagger(image, self.tagger.params)
+            job = self.jobs.add(JobKind.tagging, JobParams(bounds, _("Tags")))
+        except Exception as e:
+            self.tagger.set_in_progress(False)
+            self.report_error(util.log_error(e))
+            return
+
+        self.clear_error()
+        self.tagger.set_in_progress(True)
+        eventloop.run(_report_errors(self, self._enqueue_tagger_job(job, input)))
+
+    async def _enqueue_tagger_job(self, job: Job, input: WorkflowInput):
+        try:
+            await self._enqueue_job(job, input)
+        except Exception:
+            if any(item is job for item in self.jobs):
+                self.jobs.remove(job)
+            self.tagger.set_in_progress(False)
+            raise
+
     def estimate_cost(self, kind=JobKind.diffusion):
         try:
             if kind is JobKind.diffusion:
@@ -643,6 +682,8 @@ class DocumentModel(QObject, ObservableProperties):
         to_remove = [job for job in self.jobs if job.state is JobState.queued]
         for job in to_remove:
             self.jobs.remove(job)
+        if any(job.kind is JobKind.tagging for job in to_remove):
+            self.tagger.set_in_progress(False)
         return [job.id for job in to_remove if job.id is not None]
 
     def report_error(self, error: Error | str):
@@ -675,7 +716,10 @@ class DocumentModel(QObject, ObservableProperties):
             self.progress_kind = ProgressKind.upload
             self.progress = message.progress
         elif message.event is ClientEvent.output:
-            self.custom.handle_output(job, message.result)
+            if job.kind is JobKind.tagging:
+                self.tagger.handle_output(message.result)
+            else:
+                self.custom.handle_output(job, message.result)
         elif message.event is ClientEvent.finished:
             if message.error:  # successful jobs may have encountered some warnings
                 self.report_error(Error.from_string(message.error, ErrorKind.warning))
@@ -700,6 +744,8 @@ class DocumentModel(QObject, ObservableProperties):
     def _finish_job(self, job: Job, event: ClientEvent):
         if job.kind is JobKind.upscaling:
             self.upscale.set_in_progress(False)
+        elif job.kind is JobKind.tagging:
+            self.tagger.set_in_progress(False)
 
         if event is ClientEvent.finished:
             self.jobs.notify_finished(job)
@@ -713,6 +759,8 @@ class DocumentModel(QObject, ObservableProperties):
                     self.apply_generated_result(job.id, 0)
         else:
             self.jobs.notify_cancelled(job)
+            if job.kind is JobKind.tagging:
+                self.jobs.remove(job)
             self.progress = 0
 
     def update_preview(self):
@@ -1098,6 +1146,131 @@ class CustomInpaint(QObject, ObservableProperties):
                 layer_bounds = layer.compute_bounds()
                 return Bounds.expand(layer_bounds, include=mask.bounds)
         return None
+
+
+class TaggerWorkspace(QObject, ObservableProperties):
+    node_class = "WD14Tagger|pysssss"
+    required_inputs: ClassVar[set[str]] = {
+        "image",
+        "model",
+        "threshold",
+        "character_threshold",
+        "replace_underscore",
+        "trailing_comma",
+        "exclude_tags",
+    }
+
+    model = Property("", persist=True)
+    threshold = Property(0.35, persist=True)
+    character_threshold = Property(0.85, persist=True)
+    replace_underscore = Property(False, persist=True)
+    trailing_comma = Property(False, persist=True)
+    exclude_tags = Property("", persist=True)
+    result = Property("")
+    is_available = Property(False)
+    can_tag = Property(False)
+
+    model_changed = pyqtSignal(str)
+    threshold_changed = pyqtSignal(float)
+    character_threshold_changed = pyqtSignal(float)
+    replace_underscore_changed = pyqtSignal(bool)
+    trailing_comma_changed = pyqtSignal(bool)
+    exclude_tags_changed = pyqtSignal(str)
+    result_changed = pyqtSignal(str)
+    is_available_changed = pyqtSignal(bool)
+    can_tag_changed = pyqtSignal(bool)
+    models_changed = pyqtSignal()
+    modified = pyqtSignal(QObject, str)
+
+    def __init__(self, model: DocumentModel):
+        super().__init__()
+        self._model_ref = weakref.ref(model)
+        self._models: list[str] = []
+        self._in_progress = False
+        model._connection.state_changed.connect(self._handle_connection_state)
+        model._connection.models_changed.connect(self.refresh_models)
+        self.refresh_models()
+
+    @property
+    def models(self):
+        return self._models
+
+    @property
+    def params(self):
+        return TaggerInput(
+            self.model,
+            self.threshold,
+            self.character_threshold,
+            self.replace_underscore,
+            self.trailing_comma,
+            self.exclude_tags,
+        )
+
+    def refresh_models(self):
+        parent = ensure(self._model_ref())
+        connection = parent._connection
+        if connection.state is not ConnectionState.connected:
+            self._set_unavailable()
+            return
+
+        nodes = connection.client.models.node_inputs
+        inputs = nodes.inputs(self.node_class)
+        if inputs is None or not self.required_inputs.issubset(inputs):
+            self._set_unavailable()
+            return
+        models = nodes.options(self.node_class, "model")
+        if len(models) == 0:
+            self._set_unavailable()
+            return
+
+        self._set_models(models)
+        defaults = nodes.params(self.node_class)
+        if self.model not in models:
+            default = defaults.get("model")
+            self.model = default if isinstance(default, str) and default in models else models[0]
+        self.is_available = True
+        self._update_can_tag()
+
+    def _handle_connection_state(self, state: ConnectionState):
+        if state is ConnectionState.connected:
+            self.refresh_models()
+            return
+
+        parent = ensure(self._model_ref())
+        for job in list(parent.jobs):
+            if job.kind is JobKind.tagging and job.state in (
+                JobState.queued,
+                JobState.executing,
+            ):
+                parent.jobs.remove(job)
+        self._in_progress = False
+        self._set_unavailable()
+
+    def _set_models(self, models: list[str]):
+        if models != self._models:
+            self._models = models
+            self.models_changed.emit()
+
+    def _set_unavailable(self):
+        self._set_models([])
+        self.is_available = False
+        self._update_can_tag()
+
+    def set_in_progress(self, in_progress: bool):
+        self._in_progress = in_progress
+        self._update_can_tag()
+
+    def _update_can_tag(self):
+        self.can_tag = self.is_available and not self._in_progress
+
+    def handle_output(self, output: ClientOutput | None):
+        if isinstance(output, TextOutput):
+            self.result = output.text
+
+    def replace_prompt(self):
+        result = self.result.strip()
+        if result:
+            ensure(self._model_ref()).regions.positive = result
 
 
 @dataclass(frozen=True)

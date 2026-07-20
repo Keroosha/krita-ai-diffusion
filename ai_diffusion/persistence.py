@@ -7,9 +7,9 @@ from enum import Enum
 from time import time
 from typing import Any
 
-from PyQt5.QtCore import QByteArray, QObject
-from PyQt5.QtGui import QImageReader
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QByteArray, QObject
+from PyQt6.QtGui import QImageReader
+from PyQt6.QtWidgets import QMessageBox
 
 from . import eventloop
 from .backend.api import FillMode, InpaintMode
@@ -148,6 +148,7 @@ class ModelSync:
         state["preview_layer"] = model.preview_layer_id
         state["inpaint"] = _serialize(model.inpaint)
         state["upscale"] = _serialize(model.upscale)
+        state["tagger"] = _serialize(model.tagger)
         state["live"] = _serialize(model.live)
         state["animation"] = _serialize(model.animation)
         state["custom"] = _serialize_custom(model.custom)
@@ -169,6 +170,7 @@ class ModelSync:
         _deserialize(model, state)
         _deserialize(model.inpaint, state.get("inpaint", {}))
         _deserialize(model.upscale, state.get("upscale", {}))
+        _deserialize(model.tagger, state.get("tagger", {}))
         _deserialize(model.live, state.get("live", {}))
         _deserialize(model.animation, state.get("animation", {}))
         _deserialize_custom(model.custom, state.get("custom", {}), model.name)
@@ -198,6 +200,7 @@ class ModelSync:
         model.modified.connect(self._save_later)
         model.inpaint.modified.connect(self._save_later)
         model.upscale.modified.connect(self._save_later)
+        model.tagger.modified.connect(self._save_later)
         model.live.modified.connect(self._save_later)
         model.animation.modified.connect(self._save_later)
         model.custom.modified.connect(self._save_later)

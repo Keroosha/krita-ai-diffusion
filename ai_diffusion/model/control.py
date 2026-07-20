@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-from PyQt5.QtCore import QObject, Qt, QUuid, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QUuid, pyqtSignal
 
 from .. import util
 from ..backend import resources
@@ -13,10 +13,14 @@ from ..backend.resources import Arch, ControlMode, ResourceKind, resource_id
 from ..image import Bounds, Extent, Image
 from ..layer import Layer, LayerType
 from ..localization import translate as _
+from ..pose import Pose
 from ..util import PluginError
 from ..util import client_logger as log
-from . import jobs, model
+from . import jobs
 from .properties import ObservableProperties, Property
+
+if TYPE_CHECKING:
+    from .model import DocumentModel
 
 
 class ControlLayer(QObject, ObservableProperties):
@@ -53,7 +57,7 @@ class ControlLayer(QObject, ObservableProperties):
     error_text_changed = pyqtSignal(str)
     modified = pyqtSignal(QObject, str)
 
-    def __init__(self, model: model.DocumentModel, mode: ControlMode, layer_id: QUuid, index: int):
+    def __init__(self, model: DocumentModel, mode: ControlMode, layer_id: QUuid, index: int):
         from .root import root
 
         super().__init__()
@@ -133,7 +137,7 @@ class ControlLayer(QObject, ObservableProperties):
                 if image.extent.height > extent.height:
                     w = (image.extent.width * extent.height) // image.extent.height
                     image = Image.scale(image, Extent(w, extent.height))
-            else:
+            elif self._model.arch is not Arch.anima:
                 image = Image.scale(image, self.clip_vision_extent)
 
         strength = self.strength / self.strength_multiplier
@@ -143,12 +147,29 @@ class ControlLayer(QObject, ObservableProperties):
         self._generate_job = self._model.generate_control_layer(self)
         self.has_active_job = True
 
+    def import_pose(self, filepath: Path) -> None:
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            pose = Pose.from_open_pose_json(data)
+            if not pose.joints:
+                raise ValueError("OpenPose JSON contains no body keypoints")
+        except (OSError, ValueError) as error:
+            raise PluginError(_("Invalid OpenPose JSON") + f": {error}") from error
+
+        pose.scale(self._model.document.extent)
+        new_layer = self._model.layers.create_vector(
+            f"[Control] {ControlMode.pose.text}", pose.to_svg()
+        )
+        self.layer_id = new_layer.id
+
     def _update_is_supported(self):
         from .root import root
 
         is_supported = True
         if client := root.connection.client_if_connected:
             models = client.models.for_arch(self._model.arch)
+            if models.arch is Arch.anima and self.mode.is_ip_adapter:
+                self.has_range = False
 
             if self.mode.is_ip_adapter and models.arch in [Arch.illu, Arch.illu_v]:
                 resid = resource_id(ResourceKind.clip_vision, Arch.illu, "ip_adapter")
@@ -179,7 +200,10 @@ class ControlLayer(QObject, ObservableProperties):
                     self.error_text = _("Not supported for") + f" {models.arch.value}"
             elif self.mode.is_control_net:
                 model = models.find_control(self.mode)
-                self.has_range = model == models.control.find(self.mode, True)
+                range_model = models.control.find(self.mode, True)
+                if models.arch is Arch.anima:
+                    range_model = range_model or models.model_patch.find(self.mode, True)
+                self.has_range = model == range_model
                 if model is None:
                     search_arch = Arch.illu if models.arch is Arch.illu_v else models.arch
                     search_path = (
@@ -220,14 +244,11 @@ class ControlLayerList(QObject):
     added = pyqtSignal(ControlLayer)
     removed = pyqtSignal(ControlLayer)
 
-    _model: model.DocumentModel
-    _layers: list[ControlLayer]
-    _last_mode = ControlMode.scribble
-
-    def __init__(self, model: model.DocumentModel):
+    def __init__(self, model: DocumentModel):
         super().__init__()
         self._model = model
-        self._layers = []
+        self._layers: list[ControlLayer] = []
+        self._last_mode = ControlMode.scribble
         self._model.layers.removed.connect(self._remove_layer)
 
     def add(self):

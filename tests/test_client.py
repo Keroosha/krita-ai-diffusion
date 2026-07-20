@@ -1,5 +1,7 @@
 import asyncio
+import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -11,13 +13,24 @@ from ai_diffusion.backend.api import (
     ImageInput,
     LoraInput,
     SamplingInput,
+    TaggerInput,
     WorkflowInput,
     WorkflowKind,
 )
-from ai_diffusion.backend.client import ClientEvent, resolve_arch
-from ai_diffusion.backend.comfy_client import ComfyClient, parse_url, websocket_url
+from ai_diffusion.backend.client import ClientEvent, ClientModels, TextOutput, resolve_arch
+from ai_diffusion.backend.comfy_client import (
+    ComfyClient,
+    JobInfo,
+    _extract_tagger_output,
+    _find_anima_ip_adapter_resources,
+    _find_anima_model_patch_resources,
+    _find_ip_adapters,
+    parse_url,
+    websocket_url,
+)
+from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
 from ai_diffusion.backend.network import NetworkError
-from ai_diffusion.backend.resources import ControlMode
+from ai_diffusion.backend.resources import ControlMode, ResourceKind, resource_id
 from ai_diffusion.backend.server import Server, ServerBackend, ServerState
 from ai_diffusion.files import File, FileFormat, FileLibrary
 from ai_diffusion.image import Extent
@@ -147,6 +160,76 @@ def test_parse_url(url, expected_http, expected_ws):
     assert parsed == expected_http and websocket_url(parsed) == expected_ws
 
 
+def _node_options(name: str, values: list[str]):
+    return {"input": {"required": {name: [values]}}}
+
+
+def test_anima_model_patch_discovery_is_node_gated():
+    filenames = [
+        "anima-lllite-inpainting-v2.safetensors",
+        "anima-lllite-any-test-like-v2.safetensors",
+        "anima-lllite-scribble-1.safetensors",
+        "anima-lllite-lineart-1.safetensors",
+        "anima-lllite-depth-1.safetensors",
+        "anima-lllite-pose-1.safetensors",
+    ]
+    nodes = ComfyObjectInfo({
+        "ModelPatchLoader": _node_options("name", filenames),
+        "AnimaLLLiteApply": {},
+    })
+    discovered = _find_anima_model_patch_resources(nodes)
+    assert discovered == {
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint): filenames[0],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.universal): filenames[1],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.scribble): filenames[2],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.line_art): filenames[3],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.depth): filenames[4],
+        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.pose): filenames[5],
+    }
+
+    assert not _find_anima_model_patch_resources(
+        ComfyObjectInfo({"ModelPatchLoader": _node_options("name", filenames)})
+    )
+    assert not _find_anima_model_patch_resources(ComfyObjectInfo({"AnimaLLLiteApply": {}}))
+
+
+def test_anima_ip_adapter_discovery_is_node_gated_and_exact():
+    filename = "ip_adapter-Character_Reference-10.safetensors"
+    id = resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)
+    nodes = ComfyObjectInfo({
+        "AnimaIPAdapterLoader": _node_options("ip_adapter_name", [filename]),
+        "AnimaIPAdapterApply": {},
+    })
+    assert _find_anima_ip_adapter_resources(nodes) == {id: filename}
+
+    incompatible = "ip_adapter-Character_Reference-10-old.safetensors"
+    nodes.nodes["AnimaIPAdapterLoader"] = _node_options("ip_adapter_name", [incompatible])
+    assert _find_anima_ip_adapter_resources(nodes) == {id: None}
+
+    assert not _find_anima_ip_adapter_resources(
+        ComfyObjectInfo({"AnimaIPAdapterLoader": _node_options("ip_adapter_name", [filename])})
+    )
+    assert not _find_anima_ip_adapter_resources(
+        ComfyObjectInfo({"IPAdapterModelLoader": _node_options("ipadapter_file", [filename])})
+    )
+    assert id not in _find_ip_adapters([filename])
+
+
+def test_anima_adapter_availability_is_reference_only():
+    models = ClientModels()
+    anima = models.for_arch(Arch.anima)
+    assert anima.find_control(ControlMode.reference) is None
+
+    filename = "ip_adapter-Character_Reference-10.safetensors"
+    models.resources[resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)] = (
+        filename
+    )
+    assert anima.find_control(ControlMode.reference) == filename
+    assert anima.find_control(ControlMode.face) is None
+    assert anima.find_control(ControlMode.style) is None
+    assert anima.find_control(ControlMode.composition) is None
+
+
 def check_client_info(client: ComfyClient):
     assert client.device_info.type in ["cpu", "cuda"]
     assert client.device_info.name != ""
@@ -222,3 +305,96 @@ async def test_upload_lora(comfy_server: Server, tmp_path: Path):
 
     await task
     assert file.id in client.models.loras
+
+
+def test_tag_output_extraction():
+    for payload, expected in [
+        (["1girl, solo"], "1girl, solo"),
+        ("landscape, sky", "landscape, sky"),
+        ([""], ""),
+    ]:
+        msg = {"data": {"node": "2", "output": {"tags": payload}}}
+        output = _extract_tagger_output("job", msg)
+        assert output is not None
+        assert output.event is ClientEvent.output
+        assert output.job_id == "job"
+        assert output.result == TextOutput("2", "Tags", expected, "text/plain")
+
+
+def _tag_work():
+    return WorkflowInput(WorkflowKind.tag, tagger=TaggerInput("wd-v1-4-moat-tagger-v2"))
+
+
+def _event(type: str, job_id: str, **data):
+    return json.dumps({"type": type, "data": {"prompt_id": job_id, **data}})
+
+
+def _client_messages(client: ComfyClient):
+    messages = []
+    while not client._messages.empty():
+        messages.append(client._messages.get_nowait())
+    return messages
+
+
+@qtapp
+async def test_tag_only_websocket_completion():
+    client = ComfyClient("http://mock")
+    first = JobInfo("tag-1", _tag_work(), node_count=2)
+    second = JobInfo("tag-2", _tag_work(), node_count=2)
+    client._waiting_job.set(first)
+
+    async def websocket():
+        yield _event("execution_start", first.id)
+        yield _event(
+            "executed",
+            first.id,
+            node="2",
+            output={"tags": ["1girl, solo"]},
+        )
+        yield _event("executing", first.id, node=None)
+        client._waiting_job.set(second)
+        yield _event("execution_start", second.id)
+        yield _event("execution_cached", second.id, nodes=["1", "2"])
+        yield _event("executing", second.id, node=None)
+
+    await client._listen_websocket(cast(Any, websocket()))
+    messages = _client_messages(client)
+    assert [
+        (msg.event, msg.job_id) for msg in messages if msg.event is not ClientEvent.progress
+    ] == [
+        (ClientEvent.output, first.id),
+        (ClientEvent.finished, first.id),
+        (ClientEvent.output, second.id),
+        (ClientEvent.finished, second.id),
+    ]
+    outputs = [msg.result for msg in messages if msg.event is ClientEvent.output]
+    assert outputs == [
+        TextOutput("2", "Tags", "1girl, solo", "text/plain"),
+        TextOutput("2", "Tags", "1girl, solo", "text/plain"),
+    ]
+    for msg in messages:
+        if msg.event is ClientEvent.finished:
+            assert msg.images is not None and len(msg.images) == 0
+
+
+@pytest.mark.parametrize("kind,executed", [(WorkflowKind.tag, False), (WorkflowKind.custom, True)])
+@qtapp
+async def test_tag_only_websocket_failures(kind: WorkflowKind, executed: bool):
+    client = ComfyClient("http://mock")
+    work = _tag_work() if kind is WorkflowKind.tag else WorkflowInput(kind)
+    job = JobInfo("tag-failure", work, node_count=2)
+    client._waiting_job.set(job)
+
+    async def websocket():
+        yield _event("execution_start", job.id)
+        if kind is WorkflowKind.tag:
+            yield _event("execution_cached", job.id, nodes=["1", "2"])
+        if executed:
+            yield _event("executed", job.id, node="2", output={"tags": ["ignored"]})
+        yield _event("executing", job.id, node=None)
+
+    await client._listen_websocket(cast(Any, websocket()))
+    messages = _client_messages(client)
+    terminal = [msg for msg in messages if msg.event in (ClientEvent.finished, ClientEvent.error)]
+    assert len(terminal) == 1
+    assert terminal[0].event is ClientEvent.error

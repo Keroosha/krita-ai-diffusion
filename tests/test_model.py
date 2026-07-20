@@ -4,27 +4,39 @@ and document data and forwards them as WorkflowInput to image generation clients
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from krita import Document as MockKritaDocument
 from krita import Krita, Selection
-from PyQt5.QtCore import QByteArray, Qt
+from PyQt6.QtCore import QByteArray, Qt
 
 from ai_diffusion.backend.api import WorkflowInput, WorkflowKind
-from ai_diffusion.backend.client import CheckpointInfo, ClientEvent, ClientMessage
-from ai_diffusion.backend.resources import Arch, ControlMode
+from ai_diffusion.backend.client import (
+    CheckpointInfo,
+    ClientEvent,
+    ClientMessage,
+    ClientModels,
+    TextOutput,
+)
+from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
+from ai_diffusion.backend.resources import Arch, ControlMode, ResourceKind, resource_id
 from ai_diffusion.document import KritaDocument
 from ai_diffusion.image import BlendMode, Bounds, Extent, Image, ImageCollection
 from ai_diffusion.layer import Layer, LayerType
 from ai_diffusion.model.connection import Connection, ConnectionState
+from ai_diffusion.model.control import ControlLayer
 from ai_diffusion.model.custom_workflow import WorkflowCollection
 from ai_diffusion.model.jobs import Job, JobKind, JobParams, JobRegion, JobState
 from ai_diffusion.model.model import DocumentModel, ErrorKind, ProgressKind, no_error
 from ai_diffusion.settings import ApplyBehavior, ApplyRegionBehavior
 from ai_diffusion.style import Style
+from ai_diffusion.util import PluginError
 
 from .conftest import qtapp
 from .mock.client import MockClient
@@ -437,6 +449,177 @@ async def test_job_disconnect_reconnect(workflows_dir: Path):
         assert model.error == no_error
 
 
+def _tagger_object_info():
+    return ComfyObjectInfo({
+        "WD14Tagger|pysssss": {
+            "input": {
+                "required": {
+                    "image": ["IMAGE"],
+                    "model": [
+                        ["model-a", "model-b"],
+                        {"default": "model-b"},
+                    ],
+                    "threshold": ["FLOAT", {"default": 0.35}],
+                    "character_threshold": ["FLOAT", {"default": 0.85}],
+                    "replace_underscore": ["BOOLEAN", {"default": False}],
+                    "trailing_comma": ["BOOLEAN", {"default": False}],
+                    "exclude_tags": ["STRING", {"default": ""}],
+                }
+            }
+        }
+    })
+
+
+def _enable_tagger(model: DocumentModel, client: MockClient):
+    client.models.node_inputs = _tagger_object_info()
+    model._connection.models_changed.emit()
+    assert model.tagger.is_available
+    assert model.tagger.can_tag
+
+
+async def _wait_for_job_removed(model: DocumentModel, job_id: str, timeout: int = 100):
+    for _ in range(timeout):
+        await asyncio.sleep(0)
+        if model.jobs.find(job_id) is None:
+            return
+    raise TimeoutError(f"Job {job_id} was not removed")
+
+
+@qtapp
+async def test_tag_image_selection_and_lifecycle(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+    selection_bounds = Bounds(32, 48, 64, 80)
+    background = krita_doc.rootNode().childNodes()[0]
+    background.setPixelData(
+        Image.create(Extent(512, 512), fill=0xFF0000FF).to_packed_bytes(),
+        0,
+        0,
+        512,
+        512,
+    )
+    selected_image = Image.create(selection_bounds.extent, fill=0xFFFF0000)
+    background.setPixelData(
+        selected_image.to_packed_bytes(),
+        selection_bounds.x,
+        selection_bounds.y,
+        selection_bounds.width,
+        selection_bounds.height,
+    )
+    selection = Selection()
+    selection.setPixelData(
+        QByteArray(bytes([0xFF] * selection_bounds.area)),
+        selection_bounds.x,
+        selection_bounds.y,
+        selection_bounds.width,
+        selection_bounds.height,
+    )
+    krita_doc.setSelection(selection)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        cast(KritaDocument, model.document)._poll()
+        _enable_tagger(model, client)
+        assert model.tagger.model == "model-b"
+        model.tagger.model = "model-a"
+        model.tagger.threshold = 0.42
+        model.tagger.character_threshold = 0.73
+        model.tagger.replace_underscore = True
+        model.tagger.trailing_comma = True
+        model.tagger.exclude_tags = "lowres, text"
+
+        existing = TextOutput("old", "Old", "kept", "text/plain")
+        model.custom.outputs["old"] = existing
+        model.tag_image()
+        model.tag_image()
+        inputs = await _wait_for_enqueue(client)
+        assert len(client.enqueued) == 1
+        input = inputs[0]
+        assert input.kind is WorkflowKind.tag
+        assert input.image.extent == selection_bounds.extent
+        assert Image.compare(input.image, selected_image) < 0.01
+        assert input.tagger == model.tagger.params
+
+        job = model.jobs.find("mock-job-0")
+        assert job is not None and job.kind is JobKind.tagging
+        assert job.params.bounds == selection_bounds
+        assert not model.tagger.can_tag
+
+        tags = "1girl, red_shirt, solo"
+        client.push(
+            ClientMessage(
+                ClientEvent.output,
+                job.id or "",
+                result=TextOutput("2", "Tags", tags, "text/plain"),
+            )
+        )
+        await asyncio.sleep(0)
+        assert model.tagger.result == tags
+        client.push(ClientMessage(ClientEvent.finished, job.id or "", images=ImageCollection()))
+        await _wait_for_job_removed(model, job.id or "")
+        assert model.tagger.can_tag
+        assert model.custom.outputs["old"] == existing
+
+        model.tagger.result = f"  {tags}  "
+        model.tagger.replace_prompt()
+        assert model.regions.positive == tags
+
+        krita_doc.setSelection(None)
+        cast(KritaDocument, model.document)._poll()
+        model.tag_image()
+        inputs = await _wait_for_enqueue(client, count=2)
+        assert inputs[1].image.extent == Extent(512, 512)
+        model.cancel(queued=True)
+        await asyncio.sleep(0)
+        assert model.tagger.can_tag
+
+        previous_result = model.tagger.result
+
+        async def fail_enqueue(work: WorkflowInput, front: bool = False):
+            raise RuntimeError("tag enqueue failed")
+
+        original_enqueue = client.enqueue
+        cast(Any, client).enqueue = fail_enqueue
+        model.tag_image()
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if model.tagger.can_tag:
+                break
+        cast(Any, client).enqueue = original_enqueue
+        assert model.tagger.can_tag
+        assert model.tagger.result == previous_result
+        assert not any(job.kind is JobKind.tagging for job in model.jobs)
+
+
+@qtapp
+async def test_tag_image_disconnect_recovery(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        _enable_tagger(model, client)
+        model.tag_image()
+        await _wait_for_enqueue(client)
+        job = model.jobs.find("mock-job-0")
+        assert job is not None
+        client.push(ClientMessage(ClientEvent.queued, job.id or ""))
+        await _wait_for_job_state(job, JobState.executing)
+
+        await model._connection.disconnect()
+        assert model._connection.state is ConnectionState.disconnected
+        assert model.jobs.find(job.id or "") is None
+        assert not model.tagger.is_available
+        assert not model.tagger.can_tag
+
+        model._connection.connect(client)
+        await _wait_for_state(
+            model._connection,
+            ConnectionState.connecting,
+            ConnectionState.discover_models,
+            ConnectionState.disconnected,
+        )
+        assert model._connection.state is ConnectionState.connected
+        assert model.tagger.is_available
+        assert model.tagger.can_tag
+        await asyncio.sleep(0)
+
+
 # ---------------------------------------------------------------------------
 # Helpers for result / preview tests
 # ---------------------------------------------------------------------------
@@ -742,3 +925,160 @@ async def test_apply_region_group(workflows_dir: Path):
         assert isinstance(r2_right, tuple) and r2_right[3] == 0, (
             "result2: right side must be transparent"
         )
+
+
+def test_anima_reference_control_preserves_source_aspect_ratio():
+    source_extent = Extent(320, 512)
+    layer = SimpleNamespace(
+        name="reference",
+        bounds=Bounds(0, 0, source_extent.width, source_extent.height),
+        get_pixels=lambda bounds, time: Image.create(source_extent),
+    )
+
+    def convert(arch: Arch):
+        control = SimpleNamespace(
+            layer=layer,
+            is_supported=True,
+            _model=SimpleNamespace(arch=arch, document=SimpleNamespace(extent=Extent(1024, 1024))),
+            mode=ControlMode.reference,
+            clip_vision_extent=Extent(224, 224),
+            strength=50,
+            strength_multiplier=50,
+            start=0.0,
+            end=1.0,
+        )
+        return ControlLayer.to_api(cast(Any, control))
+
+    anima = convert(Arch.anima)
+    sdxl = convert(Arch.sdxl)
+    assert anima.image is not None and anima.image.extent == source_extent
+    assert sdxl.image is not None and sdxl.image.extent == Extent(224, 224)
+
+
+def test_control_layer_import_pose(tmp_path: Path):
+    filepath = tmp_path / "pose.json"
+    filepath.write_text(
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0, 0, 0, 10, 20, 1, 30, 40, 1] + [0, 0, 0] * 15}],
+        }),
+        encoding="utf-8",
+    )
+
+    created: list[tuple[str, str]] = []
+    new_layer_id = "new-pose-layer"
+
+    def create_vector(name: str, svg: str):
+        created.append((name, svg))
+        return SimpleNamespace(id=new_layer_id)
+
+    control = SimpleNamespace(
+        _model=SimpleNamespace(
+            document=SimpleNamespace(extent=Extent(200, 100)),
+            layers=SimpleNamespace(create_vector=create_vector),
+        ),
+        layer_id="previous-layer",
+    )
+
+    ControlLayer.import_pose(cast(Any, control), filepath)
+
+    assert control.layer_id == new_layer_id
+    assert len(created) == 1
+    name, svg = created[0]
+    assert name == "[Control] Pose"
+    assert 'width="200" height="100" viewBox="0 0 200 100"' in svg
+    assert '<circle id="P00_J01" cx="20.0" cy="10.0"' in svg
+    assert '<circle id="P00_J02" cx="60.0" cy="20.0"' in svg
+    assert '<line id="P00_B00" x1="20.0" y1="10.0" x2="60.0" y2="20.0"' in svg
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "",
+        "{",
+        "{}",
+        "[]",
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0] * 51}],
+        }),
+        json.dumps({
+            "canvas_width": 100,
+            "canvas_height": 200,
+            "people": [{"pose_keypoints_2d": [0] * 54}],
+        }),
+    ],
+)
+def test_control_layer_import_pose_invalid(tmp_path: Path, contents: str):
+    filepath = tmp_path / "pose.json"
+    filepath.write_text(contents, encoding="utf-8")
+    created: list[tuple[str, str]] = []
+
+    def create_vector(name: str, svg: str):
+        created.append((name, svg))
+        return SimpleNamespace(id="unexpected-layer")
+
+    control = SimpleNamespace(
+        _model=SimpleNamespace(
+            document=SimpleNamespace(extent=Extent(200, 100)),
+            layers=SimpleNamespace(create_vector=create_vector),
+        ),
+        layer_id="previous-layer",
+    )
+
+    with pytest.raises(PluginError, match="Invalid OpenPose JSON"):
+        ControlLayer.import_pose(cast(Any, control), filepath)
+
+    assert created == []
+    assert control.layer_id == "previous-layer"
+
+
+def test_anima_control_capabilities_use_native_resources():
+    from ai_diffusion.model.root import root as plugin_root
+
+    models = ClientModels()
+    models.resources[resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.line_art)] = (
+        "anima-lllite-lineart.safetensors"
+    )
+    models.resources[resource_id(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)] = (
+        "ip_adapter-Character_Reference-10.safetensors"
+    )
+    client = SimpleNamespace(
+        models=models,
+        features=SimpleNamespace(ip_adapter=True, max_control_layers=5),
+    )
+    previous_connection = getattr(plugin_root, "_connection", None)
+    root = cast(Any, plugin_root)
+    root._connection = SimpleNamespace(client_if_connected=client)
+
+    def update(mode: ControlMode):
+        control = SimpleNamespace(
+            _model=SimpleNamespace(arch=Arch.anima),
+            mode=mode,
+            has_range=True,
+            error_text="",
+            _index=0,
+        )
+        ControlLayer._update_is_supported(cast(Any, control))
+        return control
+
+    try:
+        line_art = update(ControlMode.line_art)
+        reference = update(ControlMode.reference)
+        face = update(ControlMode.face)
+        style = update(ControlMode.style)
+        composition = update(ControlMode.composition)
+    finally:
+        if previous_connection is None:
+            del root._connection
+        else:
+            root._connection = previous_connection
+
+    assert line_art.is_supported and line_art.has_range
+    assert reference.is_supported and not reference.has_range
+    assert not face.is_supported
+    assert not style.is_supported
+    assert not composition.is_supported

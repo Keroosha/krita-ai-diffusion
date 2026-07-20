@@ -21,7 +21,7 @@ from ..util import client_logger as log
 from ..util import parse_enum
 from ..websockets.src import websockets
 from . import resources
-from .api import WorkflowInput
+from .api import WorkflowInput, WorkflowKind
 from .client import (
     CheckpointInfo,
     Client,
@@ -212,9 +212,11 @@ class ComfyClient(Client):
 
         ip_adapter_models = nodes.options("IPAdapterModelLoader", "ipadapter_file")
         available_resources.update(_find_ip_adapters(ip_adapter_models))
+        available_resources.update(_find_anima_ip_adapter_resources(nodes))
 
         model_patches = nodes.options("ModelPatchLoader", "name")
         available_resources.update(_find_model_patches(model_patches))
+        available_resources.update(_find_anima_model_patch_resources(nodes))
 
         style_models = nodes.options("StyleModelLoader", "style_model_name")
         available_resources.update(_find_style_models(style_models))
@@ -352,6 +354,9 @@ class ComfyClient(Client):
         progress: Progress | None = None
         images = ImageCollection()
         last_images = ImageCollection()
+        last_tag_output: TextOutput | None = None
+        tag_output_received = False
+        tag_output_cached = False
         result = None
 
         async for msg in websocket:
@@ -373,6 +378,8 @@ class ComfyClient(Client):
                         progress = Progress(self._active_job)
                         images = ImageCollection()
                         result = None
+                        tag_output_received = False
+                        tag_output_cached = False
 
                 if msg["type"] == "execution_interrupted":
                     if job := await self._get_active_job(msg["data"]["prompt_id"]):
@@ -381,22 +388,48 @@ class ComfyClient(Client):
 
                 if msg["type"] == "executing" and msg["data"]["node"] is None:
                     job_id = msg["data"]["prompt_id"]
-                    if self._clear_job(job_id):
-                        if len(images) == 0:
-                            # It may happen if the entire execution is cached and no images are sent.
-                            images = last_images
-                        if len(images) == 0:
-                            # Still no images. Potential scenario: execution cached, but previous
-                            # generation happened before the client was connected.
-                            err = "No new images were generated because the inputs did not change."
-                            await self._report(ClientEvent.error, job_id, error=err)
+                    job = self._active_job
+                    if job is not None and job.id == job_id and self._clear_job(job_id):
+                        if job.work.kind is WorkflowKind.tag:
+                            if not tag_output_received and tag_output_cached:
+                                if last_tag_output is not None:
+                                    await self._report(
+                                        ClientEvent.output, job_id, result=last_tag_output
+                                    )
+                                    tag_output_received = True
+                            if tag_output_received:
+                                await self._report(
+                                    ClientEvent.finished, job_id, 1, images=ImageCollection()
+                                )
+                            else:
+                                err = (
+                                    "No tags were generated because the cached output "
+                                    "is not available."
+                                )
+                                await self._report(ClientEvent.error, job_id, error=err)
                         else:
-                            last_images = images
-                            await self._report(
-                                ClientEvent.finished, job_id, 1, images=images, result=result
-                            )
+                            if len(images) == 0:
+                                # It may happen if the entire execution is cached and no images are sent.
+                                images = last_images
+                            if len(images) == 0:
+                                # Still no images. Potential scenario: execution cached, but previous
+                                # generation happened before the client was connected.
+                                err = "No new images were generated because the inputs did not change."
+                                await self._report(ClientEvent.error, job_id, error=err)
+                            else:
+                                last_images = images
+                                await self._report(
+                                    ClientEvent.finished, job_id, 1, images=images, result=result
+                                )
 
                 elif msg["type"] in ("execution_cached", "executing", "progress"):
+                    if (
+                        msg["type"] == "execution_cached"
+                        and self._active_job is not None
+                        and self._active_job.work.kind is WorkflowKind.tag
+                    ):
+                        cached_nodes = {str(node) for node in msg["data"].get("nodes", [])}
+                        tag_output_cached = str(self._active_job.node_count) in cached_nodes
                     if self._active_job is not None and progress is not None:
                         progress.handle(msg)
                         await self._report(
@@ -411,6 +444,13 @@ class ComfyClient(Client):
                         text_output = _extract_text_output(job.id, msg)
                         if text_output is not None:
                             await self._messages.put(text_output)
+                        if job.work.kind is WorkflowKind.tag:
+                            tag_output = _extract_tagger_output(job.id, msg)
+                            if tag_output is not None:
+                                await self._messages.put(tag_output)
+                                if isinstance(tag_output.result, TextOutput):
+                                    last_tag_output = tag_output.result
+                                    tag_output_received = True
                         job_info = _extract_job_info_output(job.id, msg)
                         if job_info is not None:
                             await self._messages.put(job_info)
@@ -778,8 +818,32 @@ def _find_ip_adapters(model_list: Sequence[str]):
     return {
         resource_id(kind, ver, mode): _find_model(model_list, kind, ver, mode)
         for mode, ver in product(ControlMode, Arch.list())
-        if mode.is_ip_adapter
+        if mode.is_ip_adapter and ver is not Arch.anima
     }
+
+
+def _find_anima_ip_adapter(model_list: Sequence[str]):
+    id = ResourceId(ResourceKind.ip_adapter, Arch.anima, ControlMode.reference)
+    search_paths = resources.search_path(id.kind, id.arch, id.identifier)
+    assert search_paths is not None
+    names = {name.lower() for name in search_paths}
+    found = next(
+        (
+            filename
+            for filename in model_list
+            if filename.replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+            in names
+        ),
+        None,
+    )
+    return {id.string: found}
+
+
+def _find_anima_ip_adapter_resources(nodes: ComfyObjectInfo):
+    if "AnimaIPAdapterLoader" not in nodes or "AnimaIPAdapterApply" not in nodes:
+        return {}
+    model_list = nodes.options("AnimaIPAdapterLoader", "ip_adapter_name")
+    return _find_anima_ip_adapter(model_list)
 
 
 def _find_clip_vision_model(model_list: Sequence[str]):
@@ -801,6 +865,30 @@ def _find_model_patches(model_list: Sequence[str]):
         ResourceId(ResourceKind.model_patch, Arch.zimage, ControlMode.blur),
     ]
     return {r.string: _find_model(model_list, r.kind, r.arch, r.identifier) for r in res}
+
+
+def _find_anima_model_patches(model_list: Sequence[str]):
+    modes = [
+        ControlMode.inpaint,
+        ControlMode.universal,
+        ControlMode.scribble,
+        ControlMode.line_art,
+        ControlMode.depth,
+        ControlMode.pose,
+    ]
+    return {
+        resource_id(ResourceKind.model_patch, Arch.anima, mode): _find_model(
+            model_list, ResourceKind.model_patch, Arch.anima, mode
+        )
+        for mode in modes
+    }
+
+
+def _find_anima_model_patch_resources(nodes: ComfyObjectInfo):
+    if "ModelPatchLoader" not in nodes or "AnimaLLLiteApply" not in nodes:
+        return {}
+    model_list = nodes.options("ModelPatchLoader", "name")
+    return _find_anima_model_patches(model_list)
 
 
 def _find_style_models(model_list: Sequence[str]):
@@ -915,6 +1003,22 @@ def _extract_text_output(job_id: str, msg: dict):
                 name = f"Node {key}"
             if text is not None and name is not None:
                 result = TextOutput(key, name, text, mime)
+                return ClientMessage(ClientEvent.output, job_id, result=result)
+    except Exception as e:
+        log.warning(f"Error processing message, error={e!s}, msg={msg}")
+    return None
+
+
+def _extract_tagger_output(job_id: str, msg: dict):
+    try:
+        output = msg["data"]["output"]
+        if output is not None and "tags" in output:
+            key = msg["data"].get("node")
+            payload = output["tags"]
+            if isinstance(payload, list) and len(payload) >= 1:
+                payload = payload[0]
+            if isinstance(payload, str):
+                result = TextOutput(key, "Tags", payload, "text/plain")
                 return ClientMessage(ClientEvent.output, job_id, result=result)
     except Exception as e:
         log.warning(f"Error processing message, error={e!s}, msg={msg}")

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum, Flag
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from ..backend.api import InpaintMode
 from ..image import Bounds, ImageCollection
@@ -33,6 +33,7 @@ class JobKind(Enum):
     animation_batch = 4  # single frame as part of an animation batch
     animation_frame = 5  # just a single frame
     animation = 6  # full animation in one job
+    tagging = 7
 
 
 @dataclass

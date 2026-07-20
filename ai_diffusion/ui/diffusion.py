@@ -4,8 +4,8 @@ import asyncio
 
 import krita
 from krita import DockWidget, Krita
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -29,6 +29,7 @@ from .animation import AnimationWidget
 from .custom_workflow import CustomWorkflowPlaceholder, CustomWorkflowWidget
 from .generation import GenerationWidget
 from .live import LiveWidget
+from .tagger import TaggerWidget
 from .upscale import UpscaleWidget
 
 
@@ -283,6 +284,7 @@ class ImageDiffusionWidget(DockWidget):
         self._welcome = WelcomeWidget(root.server)
         self._generation = GenerationWidget()
         self._upscaling = UpscaleWidget()
+        self._tagger = TaggerWidget()
         self._animation = AnimationWidget()
         self._live = LiveWidget()
         self._custom = CustomWorkflowWidget()
@@ -291,6 +293,7 @@ class ImageDiffusionWidget(DockWidget):
         self._frame.addWidget(self._welcome)
         self._frame.addWidget(self._generation)
         self._frame.addWidget(self._upscaling)
+        self._frame.addWidget(self._tagger)
         self._frame.addWidget(self._live)
         self._frame.addWidget(self._animation)
         self._frame.addWidget(self._custom)
@@ -330,6 +333,9 @@ class ImageDiffusionWidget(DockWidget):
         elif model.workspace is Workspace.upscaling:
             self._upscaling.model = model
             self._frame.setCurrentWidget(self._upscaling)
+        elif model.workspace is Workspace.tagger:
+            self._tagger.model = model
+            self._frame.setCurrentWidget(self._tagger)
         elif model.workspace is Workspace.live:
             self._live.model = model
             self._frame.setCurrentWidget(self._live)

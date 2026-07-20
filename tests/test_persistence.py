@@ -15,7 +15,7 @@ from ai_diffusion.image import Bounds, Extent, Image, ImageCollection
 from ai_diffusion.model.connection import Connection
 from ai_diffusion.model.custom_workflow import WorkflowCollection
 from ai_diffusion.model.jobs import Job, JobKind, JobParams, JobState
-from ai_diffusion.model.model import DocumentModel, InpaintContext, QueueMode
+from ai_diffusion.model.model import DocumentModel, InpaintContext, QueueMode, Workspace
 from ai_diffusion.persistence import ModelSync, RecentlyUsedSync
 from ai_diffusion.settings import Settings
 from ai_diffusion.style import Style
@@ -88,6 +88,8 @@ def test_recently_used(workflows_dir: Path, tmp_path: Path):
         model1.inpaint.use_prompt_focus = True
         model1.inpaint.context = InpaintContext.entire_image
         model1.upscale.upscaler = "RealESRGAN_x4plus.pth"
+        model1.tagger.model = "document-only-model"
+        model1.tagger.threshold = 0.61
 
         # ── model 2: fresh doc, load recently used ────────────────────────
         recently_used2 = RecentlyUsedSync.from_settings()
@@ -104,6 +106,8 @@ def test_recently_used(workflows_dir: Path, tmp_path: Path):
         assert model2.inpaint.use_prompt_focus is True
         assert model2.inpaint.context is InpaintContext.entire_image
         assert model2.upscale.upscaler == "RealESRGAN_x4plus.pth"
+        assert "tagger" not in local_settings.document_defaults
+        assert "tagger_model" not in local_settings.document_defaults
     finally:
         persistence_mod.settings = original_settings  # type: ignore[assignment]
         settings_mod.settings = original_settings  # type: ignore[assignment]
@@ -130,6 +134,14 @@ async def test_sync(workflows_dir: Path):
     model1.fixed_seed = True
     model1.translation_enabled = False
     model1.queue_mode = QueueMode.front
+    model1.workspace = Workspace.tagger
+    model1.tagger.model = "wd-v1-4-moat-tagger-v2"
+    model1.tagger.threshold = 0.44
+    model1.tagger.character_threshold = 0.77
+    model1.tagger.replace_underscore = True
+    model1.tagger.trailing_comma = True
+    model1.tagger.exclude_tags = "lowres, text"
+    model1.tagger.result = "transient tags"
     model1.regions.positive = "a majestic mountain"
     model1.regions.negative = "blurry"
     model1.inpaint.mode = InpaintMode.fill
@@ -170,6 +182,15 @@ async def test_sync(workflows_dir: Path):
     assert model2.upscale.upscaler == model1.upscale.upscaler
     assert model2.upscale.strength == pytest.approx(model1.upscale.strength)
     assert model2.upscale.use_diffusion == model1.upscale.use_diffusion
+    assert Workspace.custom.value == 4
+    assert model2.workspace is Workspace.tagger
+    assert model2.tagger.model == model1.tagger.model
+    assert model2.tagger.threshold == pytest.approx(model1.tagger.threshold)
+    assert model2.tagger.character_threshold == pytest.approx(model1.tagger.character_threshold)
+    assert model2.tagger.replace_underscore is True
+    assert model2.tagger.trailing_comma is True
+    assert model2.tagger.exclude_tags == model1.tagger.exclude_tags
+    assert model2.tagger.result == ""
 
 
 # ---------------------------------------------------------------------------

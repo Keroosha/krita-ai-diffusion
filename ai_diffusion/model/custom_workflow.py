@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QAbstractListModel,
     QMetaObject,
     QModelIndex,
@@ -675,6 +675,8 @@ class CustomWorkspace(QObject, ObservableProperties):
                     job.params.is_layered = True
 
     def _handle_job_finished(self, job: Job):
+        if job.kind is JobKind.tagging:
+            return
         to_remove = [k for k in self.outputs if k not in self._new_outputs]
         for key in to_remove:
             del self.outputs[key]

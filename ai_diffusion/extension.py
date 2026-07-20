@@ -3,7 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from krita import DockWidgetFactory, DockWidgetFactoryBase, Extension, Krita, Window  # type: ignore
-from PyQt5.QtWidgets import QAction
+from PyQt6.QtGui import QAction
 
 from . import __version__, eventloop
 from .model.model import Workspace
@@ -78,6 +78,9 @@ class AIToolsExtension(Extension):
         self._create_action(
             window, "switch_workspace_upscaling", actions.set_workspace(Workspace.upscaling)
         )
+        self._create_action(
+            window, "switch_workspace_tagger", actions.set_workspace(Workspace.tagger)
+        )
         self._create_action(window, "switch_workspace_live", actions.set_workspace(Workspace.live))
         self._create_action(
             window, "switch_workspace_graph", actions.set_workspace(Workspace.custom)
@@ -88,5 +91,9 @@ class AIToolsExtension(Extension):
 
 Krita.instance().addExtension(AIToolsExtension(Krita.instance()))
 Krita.instance().addDockWidgetFactory(
-    DockWidgetFactory("imageDiffusion", DockWidgetFactoryBase.DockRight, ImageDiffusionWidget)  # type: ignore
+    DockWidgetFactory(
+        "imageDiffusion",
+        DockWidgetFactoryBase.DockPosition.DockRight,  # type: ignore
+        ImageDiffusionWidget,
+    )
 )

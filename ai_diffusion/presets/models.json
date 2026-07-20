@@ -221,6 +221,28 @@
       ]
     },
     {
+      "id": "text_encoder-qwen_3_06b-anima",
+      "name": "Qwen 3 0.6B (Anima)",
+      "files": [
+        {
+          "path": "models/text_encoders/qwen_3_06b_base.safetensors",
+          "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+          "sha256": "cd2a512003e2f9f3cd3c32a9c3573f820bb28c940f73c57b1ddaa983d9223eba"
+        }
+      ]
+    },
+    {
+      "id": "vae-default-anima",
+      "name": "VAE (Anima)",
+      "files": [
+        {
+          "path": "models/vae/qwen_image_vae.safetensors",
+          "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+          "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+        }
+      ]
+    },
+    {
       "id": "lora-inpaint-flux2_4b",
       "name": "Outpaint LoRA (Flux 2)",
       "files": [
@@ -400,6 +422,17 @@
         }
       ],
       "requirements": "cuda"
+    },
+    {
+      "id": "checkpoint-base-anima",
+      "name": "Anima Base v1.0",
+      "files": [
+        {
+          "path": "models/diffusion_models/anima-base-v1.0.safetensors",
+          "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-base-v1.0.safetensors",
+          "sha256": "bd43b7cffe1ed1153d9c41e7beb2f18cb1273eafbaa3af3edd6a173dc90a006e"
+        }
+      ]
     },
     {
       "id": "checkpoint-turbo_fp8-zimage",
@@ -768,6 +801,53 @@
           "sha256": "5cdb6a00be1b12579745b5bed0c7b83f0869073d8a864fa8cd50a9356601919a"
         }
       ]
+    },
+    {
+      "id": "model_patch-universal-anima",
+      "name": "LLLite Universal (Anima)",
+      "files": [
+        {
+          "path": "models/model_patches/anima-lllite-any-test-like-v2.safetensors",
+          "url": "https://huggingface.co/Comfy-Org/Anima-LLLite/resolve/main/model_patches/anima-lllite-any-test-like-v2.safetensors",
+          "sha256": "8863424f04a2445815a827b22cbda557a085d2752e05fab54a2b303821a9e3b2"
+        }
+      ]
+    },
+    {
+      "id": "model_patch-inpaint-anima",
+      "name": "LLLite Inpaint (Anima)",
+      "files": [
+        {
+          "path": "models/model_patches/anima-lllite-inpainting-v2.safetensors",
+          "url": "https://huggingface.co/Comfy-Org/Anima-LLLite/resolve/main/model_patches/anima-lllite-inpainting-v2.safetensors",
+          "sha256": "5242e677d2be34ee70ca7c97c3b14ff5ee49838c03fc1e60ac4852a180db6ef5"
+        }
+      ]
+    },
+    {
+      "id": "ip_adapter-reference-anima",
+      "name": "Character Reference IP-Adapter (Anima)",
+      "files": [
+        {
+          "id": "ip_adapter-reference-anima",
+          "path": "models/ipadapter/ip_adapter-Character_Reference-10.safetensors",
+          "url": "https://huggingface.co/LuciferTC/Anima-IP-Adapter/resolve/main/ip_adapter-Character_Reference-10.safetensors",
+          "sha256": "dc9612cc28b55f00ba39f6169bfe4871130be028a55682ab54dd51360acb8232"
+        },
+        {
+          "id": "ip_adapter-reference-anima",
+          "path": "models/siglip2/siglip2-base-patch16-512/config.json",
+          "url": "https://huggingface.co/google/siglip2-base-patch16-512/resolve/main/config.json",
+          "sha256": "a15bc39fbcd92498dea6d5d3cb2b0d8b9ba389d6a3f2b565ea66128a2d141934"
+        },
+        {
+          "id": "ip_adapter-reference-anima",
+          "path": "models/siglip2/siglip2-base-patch16-512/model.safetensors",
+          "url": "https://huggingface.co/google/siglip2-base-patch16-512/resolve/main/model.safetensors",
+          "sha256": "fe0e601c625e69eed8e73500d39e9b6164403fe03db8048e87913c3cefbbb3fe"
+        }
+      ],
+      "requirements": "cuda"
     },
     {
       "id": "model_patch-universal-zimage",

@@ -1,8 +1,9 @@
+import math
 import operator
 from functools import reduce
 from typing import NamedTuple
 
-from PyQt5.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 
 from .image import Extent
 from .util import batched
@@ -189,22 +190,47 @@ class Pose:
         return Pose(extent, 1, joints)
 
     @staticmethod
-    def from_open_pose_json(pose: dict):
+    def from_open_pose_json(pose: dict | list) -> "Pose":
         # Format described at https://github.com/CMU-Perceptual-Computing-Lab/openpose/blob/master/doc/02_output.md
         if isinstance(pose, list):
-            pose = pose[0]  # Newer version of DWPose return a list of pose dicts
-        extent = Extent(pose["canvas_width"], pose["canvas_height"])
+            if not pose:
+                raise ValueError("OpenPose JSON must contain a frame object")
+            pose = pose[0]  # Newer version of DWPose returns a list of pose dicts
+        if not isinstance(pose, dict):
+            raise ValueError("OpenPose JSON must contain a frame object")  # noqa: TRY004
 
-        def parse_keypoints(person: int, keypoints: list[float]):
-            assert len(keypoints) // 3 == joint_count, "Invalid keypoint count in OpenPose JSON"
+        width = pose.get("canvas_width")
+        height = pose.get("canvas_height")
+        if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+            raise ValueError("OpenPose JSON canvas dimensions must be positive integers")
+
+        people = pose.get("people")
+        if not isinstance(people, list):
+            raise ValueError("OpenPose JSON 'people' must be a list")  # noqa: TRY004
+
+        def parse_keypoints(person: int, person_data: object):
+            if not isinstance(person_data, dict):
+                raise ValueError("OpenPose JSON person must be an object")  # noqa: TRY004
+            keypoints = person_data.get("pose_keypoints_2d")
+            if (
+                not isinstance(keypoints, list)
+                or len(keypoints) != joint_count * 3
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in keypoints
+                )
+            ):
+                raise ValueError("OpenPose JSON 'pose_keypoints_2d' must contain 54 finite numbers")
             return {
                 JointIndex(person, joint): Point(x, y)
                 for joint, (x, y, confidence) in enumerate(batched(keypoints, 3))
                 if confidence > 0.1
             }
 
-        people = pose.get("people", [])
-        poses = (parse_keypoints(i, p.get("pose_keypoints_2d", [])) for i, p in enumerate(people))
+        extent = Extent(width, height)
+        poses = (parse_keypoints(i, person) for i, person in enumerate(people))
         return Pose(extent, len(people), reduce(operator.ior, poses, {}))
 
     def scale(self, target: Extent):
