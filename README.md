@@ -2,7 +2,7 @@
 
 ✨[Features](#features) | ⭳ [Download](https://github.com/Acly/krita-ai-diffusion/releases/latest) | 🛠️[Installation](https://docs.interstice.cloud/installation) | 🎞️ [Video](https://youtu.be/Ly6USRwTHe0) | 🖼️[Gallery](#gallery) | 📖[User Guide](https://docs.interstice.cloud) | 💬[Discussion](https://github.com/Acly/krita-ai-diffusion/discussions) | 🗣️[Discord](https://discord.gg/pWyzHfHHhU)
 
-This is a plugin to use generative AI in image painting and editing workflows
+This plugin lets you use generative AI in image-painting and image-editing workflows
 from within Krita. Visit
 [**www.interstice.cloud**](https://www.interstice.cloud) for an introduction. Learn how to install and use it on [**docs.interstice.cloud**](https://docs.interstice.cloud).
 
@@ -15,9 +15,9 @@ The main goals of this project are:
 * **Workflow Integration.** Most image generation tools focus heavily on AI parameters.
   This project aims to be an unobtrusive tool that integrates and synergizes
   with image editing workflows in Krita. Draw, paint, edit and generate seamlessly without worrying about resolution and technical details.
-* **Local, Open, Free.** We are committed to open source models. Customize presets, bring your
-  own models, and run everything local on your hardware. Cloud generation is also available
-  to get started quickly without heavy investment.  
+* **Local, Open, Free.** We are committed to open-source models. Customize presets, bring your
+  own models, and run everything locally on your hardware. Cloud generation is also available
+  to help you get started quickly without a heavy investment.
 
 [![Watch video demo](media/screenshot-video-preview.webp)](https://youtu.be/Ly6USRwTHe0 "Watch video demo")
 
@@ -25,16 +25,27 @@ The main goals of this project are:
 
 * **Inpainting**: Use selections for generative fill, expand, to add or remove objects
 * **Live Painting**: Let AI interpret your canvas in real time for immediate feedback. [Watch Video](https://youtu.be/AF2VyqSApjA?si=Ve5uQJWcNOATtABU)
-* **Upscaling**: Upscale and enrich images to 4k, 8k and beyond without running out of memory.
+* **Upscaling**: Upscale and enrich images to 4K, 8K and beyond without running out of memory.
 * **Diffusion Models**: Flux 2, Z-Image, Stable Diffusion 1.5, XL, Illustrious
 * **Edit Models**: Make modifications to images via text instructions
-* **ControlNet**: Scribble, Line art, Canny edge, Pose, Depth, Normals, Segmentation, +more
-* **IP-Adapter**: Reference images, Style and composition transfer, Face swap
+* **ControlNet**: Scribble, Line Art, Canny Edge, Pose, Depth, Normals, Segmentation, and more
+* **IP-Adapter**: Reference images, style and composition transfer, face swap
 * **Regions**: Assign individual text descriptions to image areas defined by layers.
 * **Job Queue**: Queue and cancel generation jobs while working on your image.
 * **History**: Preview results and browse previous generations and prompts at any time.
 * **Strong Defaults**: Versatile default style presets allow for a streamlined UI.
 * **Customization**: Create your own presets - custom checkpoints, LoRA, samplers and more.
+
+## <a name="fork-features"></a> Features of this fork
+
+* **Anima IP-Adapter + ControlNet**: Native Anima support for a character-reference IP-Adapter and LLLite-based ControlNet patches. The IP-Adapter supports one global Reference layer; regional references are not supported. Anima's universal patch supports Scribble, Line Art, and Unblur; Depth, Pose, and Inpaint require dedicated patches. Other ControlNet modes are not currently supported.
+* **WD14 Tagger**: Automatically generate tags from the visible or selected area of an image.
+* **RAW OpenPose JSON Import**: Import poses from different OpenPose editors instead of relying on unreliable pose detection.
+
+## <a name="why-fork"></a> Why fork?
+
+Because all these features were 100% neurosloped by GPT, and I *hate* Python enough to try to understand how this code works.
+If you want to backport these features to the mainline project and publish them as your own work, I'm okay with that.
 
 ## <a name="installation"></a> Getting Started
 
@@ -44,13 +55,13 @@ A concise (more technical) version is below:
 
 ### Operating System
 
-Windows, Linux, MacOS
+Windows, Linux, macOS
 
 #### Hardware support
 
-To run locally a powerful graphics card with at least 6 GB VRAM (NVIDIA) is
-recommended. Otherwise generating images will take very long or may fail due to
-insufficient memory!
+A powerful graphics card with at least 6 GB of VRAM (NVIDIA) is recommended for
+local generation. Otherwise, image generation may take a very long time or fail
+due to insufficient memory.
 
 <table>
 <tr><td>NVIDIA GPU</td><td>supported via CUDA (Windows/Linux)</td></tr>
