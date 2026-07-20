@@ -1,5 +1,7 @@
 import asyncio
+import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -11,12 +13,15 @@ from ai_diffusion.backend.api import (
     ImageInput,
     LoraInput,
     SamplingInput,
+    TaggerInput,
     WorkflowInput,
     WorkflowKind,
 )
-from ai_diffusion.backend.client import ClientEvent, ClientModels, resolve_arch
+from ai_diffusion.backend.client import ClientEvent, ClientModels, TextOutput, resolve_arch
 from ai_diffusion.backend.comfy_client import (
     ComfyClient,
+    JobInfo,
+    _extract_tagger_output,
     _find_anima_ip_adapter_resources,
     _find_anima_model_patch_resources,
     _find_ip_adapters,
@@ -300,3 +305,96 @@ async def test_upload_lora(comfy_server: Server, tmp_path: Path):
 
     await task
     assert file.id in client.models.loras
+
+
+def test_tag_output_extraction():
+    for payload, expected in [
+        (["1girl, solo"], "1girl, solo"),
+        ("landscape, sky", "landscape, sky"),
+        ([""], ""),
+    ]:
+        msg = {"data": {"node": "2", "output": {"tags": payload}}}
+        output = _extract_tagger_output("job", msg)
+        assert output is not None
+        assert output.event is ClientEvent.output
+        assert output.job_id == "job"
+        assert output.result == TextOutput("2", "Tags", expected, "text/plain")
+
+
+def _tag_work():
+    return WorkflowInput(WorkflowKind.tag, tagger=TaggerInput("wd-v1-4-moat-tagger-v2"))
+
+
+def _event(type: str, job_id: str, **data):
+    return json.dumps({"type": type, "data": {"prompt_id": job_id, **data}})
+
+
+def _client_messages(client: ComfyClient):
+    messages = []
+    while not client._messages.empty():
+        messages.append(client._messages.get_nowait())
+    return messages
+
+
+@qtapp
+async def test_tag_only_websocket_completion():
+    client = ComfyClient("http://mock")
+    first = JobInfo("tag-1", _tag_work(), node_count=2)
+    second = JobInfo("tag-2", _tag_work(), node_count=2)
+    client._waiting_job.set(first)
+
+    async def websocket():
+        yield _event("execution_start", first.id)
+        yield _event(
+            "executed",
+            first.id,
+            node="2",
+            output={"tags": ["1girl, solo"]},
+        )
+        yield _event("executing", first.id, node=None)
+        client._waiting_job.set(second)
+        yield _event("execution_start", second.id)
+        yield _event("execution_cached", second.id, nodes=["1", "2"])
+        yield _event("executing", second.id, node=None)
+
+    await client._listen_websocket(cast(Any, websocket()))
+    messages = _client_messages(client)
+    assert [
+        (msg.event, msg.job_id) for msg in messages if msg.event is not ClientEvent.progress
+    ] == [
+        (ClientEvent.output, first.id),
+        (ClientEvent.finished, first.id),
+        (ClientEvent.output, second.id),
+        (ClientEvent.finished, second.id),
+    ]
+    outputs = [msg.result for msg in messages if msg.event is ClientEvent.output]
+    assert outputs == [
+        TextOutput("2", "Tags", "1girl, solo", "text/plain"),
+        TextOutput("2", "Tags", "1girl, solo", "text/plain"),
+    ]
+    for msg in messages:
+        if msg.event is ClientEvent.finished:
+            assert msg.images is not None and len(msg.images) == 0
+
+
+@pytest.mark.parametrize("kind,executed", [(WorkflowKind.tag, False), (WorkflowKind.custom, True)])
+@qtapp
+async def test_tag_only_websocket_failures(kind: WorkflowKind, executed: bool):
+    client = ComfyClient("http://mock")
+    work = _tag_work() if kind is WorkflowKind.tag else WorkflowInput(kind)
+    job = JobInfo("tag-failure", work, node_count=2)
+    client._waiting_job.set(job)
+
+    async def websocket():
+        yield _event("execution_start", job.id)
+        if kind is WorkflowKind.tag:
+            yield _event("execution_cached", job.id, nodes=["1", "2"])
+        if executed:
+            yield _event("executed", job.id, node="2", output={"tags": ["ignored"]})
+        yield _event("executing", job.id, node=None)
+
+    await client._listen_websocket(cast(Any, websocket()))
+    messages = _client_messages(client)
+    terminal = [msg for msg in messages if msg.event in (ClientEvent.finished, ClientEvent.error)]
+    assert len(terminal) == 1
+    assert terminal[0].event is ClientEvent.error

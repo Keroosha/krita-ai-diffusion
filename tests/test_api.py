@@ -8,6 +8,7 @@ from ai_diffusion.backend.api import (
     InpaintMode,
     InpaintParams,
     RegionInput,
+    TaggerInput,
     WorkflowInput,
     WorkflowKind,
 )
@@ -61,6 +62,34 @@ def test_serialize():
     assert _ensure_cmp(result_control[0].image) == _ensure_cmp(input_control[0].image)
     assert _ensure_cmp(result_control[1].image) == _ensure_cmp(input_control[1].image)
     assert result_control[2].image is None
+    assert result == input
+
+
+def test_tagger_roundtrip():
+    input = WorkflowInput(WorkflowKind.tag)
+    input.images = ImageInput.from_extent(Extent(64, 48))
+    input.images.initial_image = Image.create(Extent(64, 48), Qt.GlobalColor.cyan)
+    input.tagger = TaggerInput(
+        model="wd-v1-4-convnext-tagger-v2",
+        threshold=0.42,
+        character_threshold=0.73,
+        replace_underscore=True,
+        trailing_comma=True,
+        exclude_tags="lowres, watermark",
+    )
+
+    data = input.to_dict(ImageFileFormat.webp_lossless)
+    result = WorkflowInput.from_dict(data)
+
+    assert data["kind"] == "tag"
+    assert data["tagger"] == {
+        "model": "wd-v1-4-convnext-tagger-v2",
+        "threshold": 0.42,
+        "character_threshold": 0.73,
+        "replace_underscore": True,
+        "trailing_comma": True,
+        "exclude_tags": "lowres, watermark",
+    }
     assert result == input
 
 

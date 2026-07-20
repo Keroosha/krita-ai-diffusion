@@ -19,11 +19,18 @@ from ai_diffusion.backend.api import (
     LoraInput,
     RegionInput,
     SamplingInput,
+    TaggerInput,
     UpscaleInput,
     WorkflowInput,
     WorkflowKind,
 )
-from ai_diffusion.backend.client import CheckpointInfo, Client, ClientEvent, ClientModels
+from ai_diffusion.backend.client import (
+    CheckpointInfo,
+    Client,
+    ClientEvent,
+    ClientModels,
+    TextOutput,
+)
 from ai_diffusion.backend.cloud_client import CloudClient
 from ai_diffusion.backend.comfy_client import ComfyClient
 from ai_diffusion.backend.comfy_workflow import ComfyWorkflow
@@ -201,6 +208,65 @@ def automatic_inpaint(
     params.feather = max(51, int(bounds.width * 0.2))
     params.blend = 25
     return params
+
+
+def test_tagger_workflow():
+    image = Image.create(Extent(64, 48))
+    params = TaggerInput(
+        model="wd-v1-4-convnext-tagger-v2",
+        threshold=0.42,
+        character_threshold=0.73,
+        replace_underscore=True,
+        trailing_comma=True,
+        exclude_tags="lowres, watermark",
+    )
+
+    graph = workflow.create(workflow.prepare_tagger(image, params), ClientModels())
+    load_image = next(graph.find("ETN_LoadImageCache"))
+    tagger = next(graph.find("WD14Tagger|pysssss"))
+
+    assert graph.node_count == 2
+    assert tagger.inputs == {
+        "image": load_image.output(0),
+        "model": "wd-v1-4-convnext-tagger-v2",
+        "threshold": 0.42,
+        "character_threshold": 0.73,
+        "replace_underscore": True,
+        "trailing_comma": True,
+        "exclude_tags": "lowres, watermark",
+    }
+
+
+def test_tagger_execute(qtapp, local_client: ComfyClient):
+    models = local_client.models.node_inputs.options("WD14Tagger|pysssss", "model")
+    if len(models) == 0:
+        pytest.skip("comfyui-wd14-tagger is not installed")
+    work = workflow.prepare_tagger(
+        Image.load(image_dir / "cat.webp"),
+        TaggerInput(model=models[0], threshold=0.35, character_threshold=0.85),
+    )
+
+    async def run():
+        job_id = None
+        result = None
+        messages = local_client.listen()
+        async for message in messages:
+            if job_id is None:
+                job_id = await local_client.enqueue(work)
+            if message.job_id != job_id:
+                continue
+            if message.event is ClientEvent.output:
+                assert isinstance(message.result, TextOutput)
+                result = message.result.text
+            elif message.event is ClientEvent.error:
+                raise RuntimeError(message.error)
+            elif message.event is ClientEvent.finished:
+                assert result is not None
+                return result
+        assert False, "Connection closed without receiving tags"
+
+    tags = qtapp.run(run())
+    assert isinstance(tags, str)
 
 
 def test_inpaint_params():

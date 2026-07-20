@@ -8,6 +8,8 @@ def generate():
             model.generate()
         elif model.workspace is Workspace.upscaling:
             model.upscale_image()
+        elif model.workspace is Workspace.tagger:
+            model.tag_image()
         elif model.workspace is Workspace.live:
             model.generate_live()
         elif model.workspace is Workspace.animation:
@@ -67,8 +69,15 @@ def set_workspace(workspace: Workspace):
 
 def toggle_workspace():
     if model := root.model_for_active_document():
-        l = list(Workspace)
-        next = l[(l.index(model.workspace) + 1) % len(l)]
+        order = (
+            Workspace.generation,
+            Workspace.upscaling,
+            Workspace.tagger,
+            Workspace.live,
+            Workspace.animation,
+            Workspace.custom,
+        )
+        next = order[(order.index(model.workspace) + 1) % len(order)]
         model.workspace = next
 
 

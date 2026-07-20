@@ -367,7 +367,6 @@
     "Style Presets": "Impostazioni Stile",
     "Style Prompt": "Stile Richiesto",
     "Styles": "Modelli",
-    "Switch between workspaces: image generation, upscaling, live preview and animation.": "Passa da uno spazio di lavoro all'altro: generazione di immagini, upscaling, anteprima live e animazione.",
     "Tag Auto-Completion": "Completamento automatico dei tag",
     "Target layer": "Livello di destinazione",
     "Target layer not found": "Livello di destinazione non trovato",
@@ -598,6 +597,21 @@
     "Anima models": null,
     "Import pose from OpenPose JSON": null,
     "Import Pose": null,
-    "Invalid OpenPose JSON": null
+    "Invalid OpenPose JSON": null,
+    "Generated tags will appear here": null,
+    "Copy": null,
+    "Tagger": null,
+    "Tags": null,
+    "WD14Tagger|pysssss is not installed or has an incompatible input contract.": null,
+    "Add trailing comma": null,
+    "Exclude tags": null,
+    "Threshold": null,
+    "lowres, text, watermark": null,
+    "Tag": null,
+    "Switch between workspaces: image generation, upscaling, tagging, live preview and animation.": null,
+    "Character threshold": null,
+    "The WD14 Tagger node is not installed or has an incompatible input contract": null,
+    "Replace positive prompt": null,
+    "Replace underscores with spaces": null
   }
 }

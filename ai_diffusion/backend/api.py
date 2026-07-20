@@ -20,6 +20,7 @@ class WorkflowKind(Enum):
     upscale_tiled = 5
     control_image = 6
     custom = 7
+    tag = 8
 
 
 @dataclass
@@ -167,6 +168,16 @@ class UpscaleInput:
 
 
 @dataclass
+class TaggerInput:
+    model: str
+    threshold: float = 0.35
+    character_threshold: float = 0.85
+    replace_underscore: bool = False
+    trailing_comma: bool = False
+    exclude_tags: str = ""
+
+
+@dataclass
 class CustomStyleInput:
     models: CheckpointInput
     sampling: SamplingInput
@@ -194,6 +205,7 @@ class WorkflowInput:
     inpaint: InpaintParams | None = None
     crop_upscale_extent: Extent | None = None
     upscale: UpscaleInput | None = None
+    tagger: TaggerInput | None = None
     control_mode: ControlMode = ControlMode.reference
     batch_count: int = 1
     color_match: float = 0.0
@@ -247,6 +259,8 @@ class WorkflowInput:
 
     @property
     def cost(self):
+        if self.kind is WorkflowKind.tag:
+            return 0
         if self.kind is WorkflowKind.control_image:
             return 1
         if self.kind is WorkflowKind.upscale_simple:

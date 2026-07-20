@@ -21,7 +21,7 @@ from ..util import client_logger as log
 from ..util import parse_enum
 from ..websockets.src import websockets
 from . import resources
-from .api import WorkflowInput
+from .api import WorkflowInput, WorkflowKind
 from .client import (
     CheckpointInfo,
     Client,
@@ -354,6 +354,9 @@ class ComfyClient(Client):
         progress: Progress | None = None
         images = ImageCollection()
         last_images = ImageCollection()
+        last_tag_output: TextOutput | None = None
+        tag_output_received = False
+        tag_output_cached = False
         result = None
 
         async for msg in websocket:
@@ -375,6 +378,8 @@ class ComfyClient(Client):
                         progress = Progress(self._active_job)
                         images = ImageCollection()
                         result = None
+                        tag_output_received = False
+                        tag_output_cached = False
 
                 if msg["type"] == "execution_interrupted":
                     if job := await self._get_active_job(msg["data"]["prompt_id"]):
@@ -383,22 +388,48 @@ class ComfyClient(Client):
 
                 if msg["type"] == "executing" and msg["data"]["node"] is None:
                     job_id = msg["data"]["prompt_id"]
-                    if self._clear_job(job_id):
-                        if len(images) == 0:
-                            # It may happen if the entire execution is cached and no images are sent.
-                            images = last_images
-                        if len(images) == 0:
-                            # Still no images. Potential scenario: execution cached, but previous
-                            # generation happened before the client was connected.
-                            err = "No new images were generated because the inputs did not change."
-                            await self._report(ClientEvent.error, job_id, error=err)
+                    job = self._active_job
+                    if job is not None and job.id == job_id and self._clear_job(job_id):
+                        if job.work.kind is WorkflowKind.tag:
+                            if not tag_output_received and tag_output_cached:
+                                if last_tag_output is not None:
+                                    await self._report(
+                                        ClientEvent.output, job_id, result=last_tag_output
+                                    )
+                                    tag_output_received = True
+                            if tag_output_received:
+                                await self._report(
+                                    ClientEvent.finished, job_id, 1, images=ImageCollection()
+                                )
+                            else:
+                                err = (
+                                    "No tags were generated because the cached output "
+                                    "is not available."
+                                )
+                                await self._report(ClientEvent.error, job_id, error=err)
                         else:
-                            last_images = images
-                            await self._report(
-                                ClientEvent.finished, job_id, 1, images=images, result=result
-                            )
+                            if len(images) == 0:
+                                # It may happen if the entire execution is cached and no images are sent.
+                                images = last_images
+                            if len(images) == 0:
+                                # Still no images. Potential scenario: execution cached, but previous
+                                # generation happened before the client was connected.
+                                err = "No new images were generated because the inputs did not change."
+                                await self._report(ClientEvent.error, job_id, error=err)
+                            else:
+                                last_images = images
+                                await self._report(
+                                    ClientEvent.finished, job_id, 1, images=images, result=result
+                                )
 
                 elif msg["type"] in ("execution_cached", "executing", "progress"):
+                    if (
+                        msg["type"] == "execution_cached"
+                        and self._active_job is not None
+                        and self._active_job.work.kind is WorkflowKind.tag
+                    ):
+                        cached_nodes = {str(node) for node in msg["data"].get("nodes", [])}
+                        tag_output_cached = str(self._active_job.node_count) in cached_nodes
                     if self._active_job is not None and progress is not None:
                         progress.handle(msg)
                         await self._report(
@@ -413,6 +444,13 @@ class ComfyClient(Client):
                         text_output = _extract_text_output(job.id, msg)
                         if text_output is not None:
                             await self._messages.put(text_output)
+                        if job.work.kind is WorkflowKind.tag:
+                            tag_output = _extract_tagger_output(job.id, msg)
+                            if tag_output is not None:
+                                await self._messages.put(tag_output)
+                                if isinstance(tag_output.result, TextOutput):
+                                    last_tag_output = tag_output.result
+                                    tag_output_received = True
                         job_info = _extract_job_info_output(job.id, msg)
                         if job_info is not None:
                             await self._messages.put(job_info)
@@ -965,6 +1003,22 @@ def _extract_text_output(job_id: str, msg: dict):
                 name = f"Node {key}"
             if text is not None and name is not None:
                 result = TextOutput(key, name, text, mime)
+                return ClientMessage(ClientEvent.output, job_id, result=result)
+    except Exception as e:
+        log.warning(f"Error processing message, error={e!s}, msg={msg}")
+    return None
+
+
+def _extract_tagger_output(job_id: str, msg: dict):
+    try:
+        output = msg["data"]["output"]
+        if output is not None and "tags" in output:
+            key = msg["data"].get("node")
+            payload = output["tags"]
+            if isinstance(payload, list) and len(payload) >= 1:
+                payload = payload[0]
+            if isinstance(payload, str):
+                result = TextOutput(key, "Tags", payload, "text/plain")
                 return ClientMessage(ClientEvent.output, job_id, result=result)
     except Exception as e:
         log.warning(f"Error processing message, error={e!s}, msg={msg}")

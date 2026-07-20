@@ -34,6 +34,7 @@ from .api import (
     LoraInput,
     RegionInput,
     SamplingInput,
+    TaggerInput,
     UpscaleInput,
     WorkflowInput,
     WorkflowKind,
@@ -1794,6 +1795,27 @@ def prepare_upscale_simple(image: Image, model: str, factor: float):
     return i
 
 
+def prepare_tagger(image: Image, params: TaggerInput):
+    images = ImageInput.from_extent(image.extent)
+    images.initial_image = image
+    return WorkflowInput(WorkflowKind.tag, images=images, tagger=params)
+
+
+def tag_image(workflow: ComfyWorkflow, image: Image, params: TaggerInput):
+    workflow.add(
+        "WD14Tagger|pysssss",
+        1,
+        image=workflow.load_image(image),
+        model=params.model,
+        threshold=params.threshold,
+        character_threshold=params.character_threshold,
+        replace_underscore=params.replace_underscore,
+        trailing_comma=params.trailing_comma,
+        exclude_tags=params.exclude_tags,
+    )
+    return workflow
+
+
 def prepare_create_control_image(
     image: Image,
     mode: ControlMode,
@@ -1887,6 +1909,8 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             bounds=i.inpaint.target_bounds if i.inpaint else None,
             seed=i.sampling.seed if i.sampling else -1,
         )
+    elif i.kind is WorkflowKind.tag:
+        return tag_image(workflow, i.image, ensure(i.tagger))
     elif i.kind is WorkflowKind.custom:
         seed = ensure(i.sampling).seed
         return expand_custom(

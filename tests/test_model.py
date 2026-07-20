@@ -17,7 +17,14 @@ from krita import Krita, Selection
 from PyQt6.QtCore import QByteArray, Qt
 
 from ai_diffusion.backend.api import WorkflowInput, WorkflowKind
-from ai_diffusion.backend.client import CheckpointInfo, ClientEvent, ClientMessage, ClientModels
+from ai_diffusion.backend.client import (
+    CheckpointInfo,
+    ClientEvent,
+    ClientMessage,
+    ClientModels,
+    TextOutput,
+)
+from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
 from ai_diffusion.backend.resources import Arch, ControlMode, ResourceKind, resource_id
 from ai_diffusion.document import KritaDocument
 from ai_diffusion.image import BlendMode, Bounds, Extent, Image, ImageCollection
@@ -440,6 +447,177 @@ async def test_job_disconnect_reconnect(workflows_dir: Path):
         # Finishing job2 cleans up job1 via _cancel_earlier_jobs
         assert job1.state is JobState.cancelled
         assert model.error == no_error
+
+
+def _tagger_object_info():
+    return ComfyObjectInfo({
+        "WD14Tagger|pysssss": {
+            "input": {
+                "required": {
+                    "image": ["IMAGE"],
+                    "model": [
+                        ["model-a", "model-b"],
+                        {"default": "model-b"},
+                    ],
+                    "threshold": ["FLOAT", {"default": 0.35}],
+                    "character_threshold": ["FLOAT", {"default": 0.85}],
+                    "replace_underscore": ["BOOLEAN", {"default": False}],
+                    "trailing_comma": ["BOOLEAN", {"default": False}],
+                    "exclude_tags": ["STRING", {"default": ""}],
+                }
+            }
+        }
+    })
+
+
+def _enable_tagger(model: DocumentModel, client: MockClient):
+    client.models.node_inputs = _tagger_object_info()
+    model._connection.models_changed.emit()
+    assert model.tagger.is_available
+    assert model.tagger.can_tag
+
+
+async def _wait_for_job_removed(model: DocumentModel, job_id: str, timeout: int = 100):
+    for _ in range(timeout):
+        await asyncio.sleep(0)
+        if model.jobs.find(job_id) is None:
+            return
+    raise TimeoutError(f"Job {job_id} was not removed")
+
+
+@qtapp
+async def test_tag_image_selection_and_lifecycle(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+    selection_bounds = Bounds(32, 48, 64, 80)
+    background = krita_doc.rootNode().childNodes()[0]
+    background.setPixelData(
+        Image.create(Extent(512, 512), fill=0xFF0000FF).to_packed_bytes(),
+        0,
+        0,
+        512,
+        512,
+    )
+    selected_image = Image.create(selection_bounds.extent, fill=0xFFFF0000)
+    background.setPixelData(
+        selected_image.to_packed_bytes(),
+        selection_bounds.x,
+        selection_bounds.y,
+        selection_bounds.width,
+        selection_bounds.height,
+    )
+    selection = Selection()
+    selection.setPixelData(
+        QByteArray(bytes([0xFF] * selection_bounds.area)),
+        selection_bounds.x,
+        selection_bounds.y,
+        selection_bounds.width,
+        selection_bounds.height,
+    )
+    krita_doc.setSelection(selection)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        cast(KritaDocument, model.document)._poll()
+        _enable_tagger(model, client)
+        assert model.tagger.model == "model-b"
+        model.tagger.model = "model-a"
+        model.tagger.threshold = 0.42
+        model.tagger.character_threshold = 0.73
+        model.tagger.replace_underscore = True
+        model.tagger.trailing_comma = True
+        model.tagger.exclude_tags = "lowres, text"
+
+        existing = TextOutput("old", "Old", "kept", "text/plain")
+        model.custom.outputs["old"] = existing
+        model.tag_image()
+        model.tag_image()
+        inputs = await _wait_for_enqueue(client)
+        assert len(client.enqueued) == 1
+        input = inputs[0]
+        assert input.kind is WorkflowKind.tag
+        assert input.image.extent == selection_bounds.extent
+        assert Image.compare(input.image, selected_image) < 0.01
+        assert input.tagger == model.tagger.params
+
+        job = model.jobs.find("mock-job-0")
+        assert job is not None and job.kind is JobKind.tagging
+        assert job.params.bounds == selection_bounds
+        assert not model.tagger.can_tag
+
+        tags = "1girl, red_shirt, solo"
+        client.push(
+            ClientMessage(
+                ClientEvent.output,
+                job.id or "",
+                result=TextOutput("2", "Tags", tags, "text/plain"),
+            )
+        )
+        await asyncio.sleep(0)
+        assert model.tagger.result == tags
+        client.push(ClientMessage(ClientEvent.finished, job.id or "", images=ImageCollection()))
+        await _wait_for_job_removed(model, job.id or "")
+        assert model.tagger.can_tag
+        assert model.custom.outputs["old"] == existing
+
+        model.tagger.result = f"  {tags}  "
+        model.tagger.replace_prompt()
+        assert model.regions.positive == tags
+
+        krita_doc.setSelection(None)
+        cast(KritaDocument, model.document)._poll()
+        model.tag_image()
+        inputs = await _wait_for_enqueue(client, count=2)
+        assert inputs[1].image.extent == Extent(512, 512)
+        model.cancel(queued=True)
+        await asyncio.sleep(0)
+        assert model.tagger.can_tag
+
+        previous_result = model.tagger.result
+
+        async def fail_enqueue(work: WorkflowInput, front: bool = False):
+            raise RuntimeError("tag enqueue failed")
+
+        original_enqueue = client.enqueue
+        cast(Any, client).enqueue = fail_enqueue
+        model.tag_image()
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if model.tagger.can_tag:
+                break
+        cast(Any, client).enqueue = original_enqueue
+        assert model.tagger.can_tag
+        assert model.tagger.result == previous_result
+        assert not any(job.kind is JobKind.tagging for job in model.jobs)
+
+
+@qtapp
+async def test_tag_image_disconnect_recovery(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        _enable_tagger(model, client)
+        model.tag_image()
+        await _wait_for_enqueue(client)
+        job = model.jobs.find("mock-job-0")
+        assert job is not None
+        client.push(ClientMessage(ClientEvent.queued, job.id or ""))
+        await _wait_for_job_state(job, JobState.executing)
+
+        await model._connection.disconnect()
+        assert model._connection.state is ConnectionState.disconnected
+        assert model.jobs.find(job.id or "") is None
+        assert not model.tagger.is_available
+        assert not model.tagger.can_tag
+
+        model._connection.connect(client)
+        await _wait_for_state(
+            model._connection,
+            ConnectionState.connecting,
+            ConnectionState.discover_models,
+            ConnectionState.disconnected,
+        )
+        assert model._connection.state is ConnectionState.connected
+        assert model.tagger.is_available
+        assert model.tagger.can_tag
+        await asyncio.sleep(0)
 
 
 # ---------------------------------------------------------------------------

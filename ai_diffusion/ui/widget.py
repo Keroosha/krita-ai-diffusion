@@ -877,6 +877,7 @@ class WorkspaceSelectWidget(QToolButton):
     _icons: ClassVar[dict[Workspace, QIcon]] = {
         Workspace.generation: theme.icon("workspace-generation"),
         Workspace.upscaling: theme.icon("workspace-upscaling"),
+        Workspace.tagger: theme.icon("filter"),
         Workspace.live: theme.icon("workspace-live"),
         Workspace.animation: theme.icon("workspace-animation"),
         Workspace.custom: theme.icon("workspace-custom"),
@@ -890,6 +891,7 @@ class WorkspaceSelectWidget(QToolButton):
         menu = QMenu(self)
         menu.addAction(self._create_action(_("Generate"), Workspace.generation))
         menu.addAction(self._create_action(_("Upscale"), Workspace.upscaling))
+        menu.addAction(self._create_action(_("Tagger"), Workspace.tagger))
         menu.addAction(self._create_action(_("Live"), Workspace.live))
         menu.addAction(self._create_action(_("Animation"), Workspace.animation))
         menu.addAction(self._create_action(_("Graph"), Workspace.custom))
@@ -898,7 +900,9 @@ class WorkspaceSelectWidget(QToolButton):
         self.setMenu(menu)
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.setToolTip(
-            _("Switch between workspaces: image generation, upscaling, live preview and animation.")
+            _(
+                "Switch between workspaces: image generation, upscaling, tagging, live preview and animation."
+            )
         )
         self.setMinimumWidth(int(self.sizeHint().width() * 1.6))
         self.value = Workspace.generation

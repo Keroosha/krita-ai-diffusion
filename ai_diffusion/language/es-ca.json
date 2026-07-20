@@ -367,7 +367,6 @@
     "Style Presets": "Estil predefinit",
     "Style Prompt": "Indicador d'estil",
     "Styles": "Estils",
-    "Switch between workspaces: image generation, upscaling, live preview and animation.": "Canviar entre espais de treball: generació d'imatge, augment d'escala, vista prèvia en directe i animació.",
     "Tag Auto-Completion": "Autocompletat d'etiquetes",
     "Target layer": "Capa de destinació",
     "Target layer not found": "Capa de destinació no trobada",
@@ -598,6 +597,21 @@
     "Anima models": null,
     "Import pose from OpenPose JSON": null,
     "Import Pose": null,
-    "Invalid OpenPose JSON": null
+    "Invalid OpenPose JSON": null,
+    "Generated tags will appear here": null,
+    "Copy": null,
+    "Tagger": null,
+    "Tags": null,
+    "WD14Tagger|pysssss is not installed or has an incompatible input contract.": null,
+    "Add trailing comma": null,
+    "Exclude tags": null,
+    "Threshold": null,
+    "lowres, text, watermark": null,
+    "Tag": null,
+    "Switch between workspaces: image generation, upscaling, tagging, live preview and animation.": null,
+    "Character threshold": null,
+    "The WD14 Tagger node is not installed or has an incompatible input contract": null,
+    "Replace positive prompt": null,
+    "Replace underscores with spaces": null
   }
 }
