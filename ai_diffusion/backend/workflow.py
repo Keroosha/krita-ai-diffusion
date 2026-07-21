@@ -545,10 +545,12 @@ def apply_attention_mask(
 
     bottom_region = cond.regions[0]
     if bottom_region.is_background:
-        regions = w.background_region(bottom_region.encode_prompt(w, clip, cond.style_prompt))
+        background_conditioning = bottom_region.encode_prompt(w, clip, cond.style_prompt)
+        regions = w.background_region(background_conditioning)
         remaining = cond.regions[1:]
     else:
-        regions = w.background_region(cond.positive.encode(w, clip, cond.style_prompt))
+        background_conditioning = cond.positive.encode(w, clip, cond.style_prompt)
+        regions = w.background_region(background_conditioning)
         remaining = cond.regions
 
     for region in remaining:
@@ -556,7 +558,22 @@ def apply_attention_mask(
         prompt = region.encode_prompt(w, clip, cond.style_prompt)
         regions = w.define_region(regions, mask, prompt)
 
-    model = w.attention_mask(model, regions)
+    if clip.arch is Arch.anima:
+        required_nodes = ("AnimaConditioningRegion", "ApplyAnimaRegionalConditioningPatch")
+        if w.node_defs and any(node not in w.node_defs for node in required_nodes):
+            raise RuntimeError(
+                "ComfyUI-Anima-Regional-Conditioning is required for Anima regional prompts"
+            )
+
+        anima_regions = None
+        for region in remaining:
+            mask = region.mask.load(w, shape)
+            prompt = region.encode_prompt(w, clip, cond.style_prompt)
+            anima_regions = w.define_anima_conditioning_region(mask, prompt, regions=anima_regions)
+        assert anima_regions is not None
+        model = w.apply_anima_regional_conditioning(model, anima_regions, background_conditioning)
+    else:
+        model = w.attention_mask(model, regions)
     return model, regions
 
 

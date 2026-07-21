@@ -740,6 +740,50 @@ class ComfyWorkflow:
             "ETN_DefineRegion", 1, regions=regions, mask=mask, conditioning=conditioning
         )
 
+    def define_anima_conditioning_region(
+        self,
+        mask: Output,
+        conditioning: Output,
+        weight: float = 1.0,
+        regions: Output | None = None,
+    ):
+        if regions is None:
+            return self.add(
+                "AnimaConditioningRegion",
+                1,
+                mask=mask,
+                conditioning=conditioning,
+                weight=weight,
+            )
+        return self.add(
+            "AnimaConditioningRegion",
+            1,
+            mask=mask,
+            conditioning=conditioning,
+            weight=weight,
+            regions=regions,
+        )
+
+    def apply_anima_regional_conditioning(
+        self, model: Output, regions: Output, background_conditioning: Output
+    ):
+        return self.add(
+            "ApplyAnimaRegionalConditioningPatch",
+            1,
+            model=model,
+            regions=regions,
+            background_conditioning=background_conditioning,
+            base_mode="disabled",
+            base_strength=0.2,
+            start_percent=0.0,
+            end_percent=0.35,
+            cross_mask_strength=1.0,
+            self_mask_strength=0.2,
+            base_ratio=0.1,
+            cross_inject_every_n_blocks=1,
+            self_inject_every_n_blocks=1,
+        )
+
     def list_region_masks(self, regions: Output):
         return self.add("ETN_ListRegionMasks", 1, regions=regions)
 

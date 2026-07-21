@@ -145,4 +145,14 @@ def test_anima_search_paths_and_custom_node():
     node = next(node for node in res.optional_custom_nodes if node.name == "Anima IP-Adapter")
     assert node.version == "3813b8c8a655e1a1860b45d9a84ed43383528074"
     assert node.nodes == ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"]
+
+    assert all(node.name != "Anima Regional Conditioning" for node in res.required_custom_nodes)
+    node = next(
+        node for node in res.optional_custom_nodes if node.name == "Anima Regional Conditioning"
+    )
+    assert node.folder == "Comfyui-Anima-Regional-Conditioning"
+    assert node.url == "https://github.com/Sen-sou/Comfyui-Anima-Regional-Conditioning"
+    assert node.version == "099cf1fa052721394963418455d49f7087efaf6c"
+    assert node.nodes == ["AnimaConditioningRegion", "ApplyAnimaRegionalConditioningPatch"]
+    assert res.version == "1.55.0"
     assert res.comfy_version == "4800e78518ebb1f2a9443ea5418edbff6c3935f9"

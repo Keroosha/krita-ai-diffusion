@@ -33,7 +33,7 @@ from ai_diffusion.backend.client import (
 )
 from ai_diffusion.backend.cloud_client import CloudClient
 from ai_diffusion.backend.comfy_client import ComfyClient
-from ai_diffusion.backend.comfy_workflow import ComfyWorkflow
+from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo, ComfyWorkflow
 from ai_diffusion.backend.resources import ControlMode, ResourceKind, resource_id
 from ai_diffusion.backend.workflow import detect_inpaint
 from ai_diffusion.files import File, FileCollection, FileFormat, FileLibrary, FileSource
@@ -339,6 +339,123 @@ def test_anima_base_workflow_uses_official_loader_contract():
     assert latent_node["class_type"] == "EmptyLatentImage"
     assert latent_node["inputs"] == {"width": 1024, "height": 1024, "batch_size": 1}
     assert not any(node["class_type"] == "EmptySD3LatentImage" for node in w.root.values())
+
+
+def _regional_conditioning():
+    cond = workflow.Conditioning(workflow.TextPrompt("root", ""), None)
+    cond.regions = [
+        workflow.Region(
+            workflow.ImageOutput(workflow.Output(91, 0), is_mask=True),
+            Bounds(0, 0, 64, 64),
+            workflow.TextPrompt("background", ""),
+            is_background=True,
+        ),
+        workflow.Region(
+            workflow.ImageOutput(workflow.Output(92, 0), is_mask=True),
+            Bounds(0, 0, 32, 64),
+            workflow.TextPrompt("left", ""),
+        ),
+        workflow.Region(
+            workflow.ImageOutput(workflow.Output(93, 0), is_mask=True),
+            Bounds(32, 0, 32, 64),
+            workflow.TextPrompt("right", ""),
+        ),
+    ]
+    return cond
+
+
+def test_anima_regional_conditioning_graph_contract():
+    node_defs = ComfyObjectInfo({
+        "AnimaConditioningRegion": {},
+        "ApplyAnimaRegionalConditioningPatch": {},
+    })
+    w = ComfyWorkflow(node_defs)
+    model, regions = workflow.apply_attention_mask(
+        w,
+        workflow.Output(90, 0),
+        _regional_conditioning(),
+        workflow.Clip(workflow.Output(94, 0), Arch.anima),
+    )
+
+    etn_background = next(
+        node for node in w.root.values() if node["class_type"] == "ETN_BackgroundRegion"
+    )
+    etn_regions = [
+        (id, node) for id, node in w.root.items() if node["class_type"] == "ETN_DefineRegion"
+    ]
+    anima_regions = [
+        (id, node) for id, node in w.root.items() if node["class_type"] == "AnimaConditioningRegion"
+    ]
+    patch_id, patch = next(
+        (id, node)
+        for id, node in w.root.items()
+        if node["class_type"] == "ApplyAnimaRegionalConditioningPatch"
+    )
+
+    assert len(etn_regions) == 2
+    assert regions == workflow.Output(int(etn_regions[-1][0]), 0)
+    assert len(anima_regions) == 2
+    assert anima_regions[0][1]["inputs"] == {
+        "mask": ["92", 0],
+        "conditioning": etn_regions[0][1]["inputs"]["conditioning"],
+        "weight": 1.0,
+    }
+    assert anima_regions[1][1]["inputs"] == {
+        "mask": ["93", 0],
+        "conditioning": etn_regions[1][1]["inputs"]["conditioning"],
+        "weight": 1.0,
+        "regions": [anima_regions[0][0], 0],
+    }
+    assert model == workflow.Output(int(patch_id), 0)
+    assert patch["inputs"] == {
+        "model": ["90", 0],
+        "regions": [anima_regions[1][0], 0],
+        "background_conditioning": etn_background["inputs"]["conditioning"],
+        "base_mode": "disabled",
+        "base_strength": 0.2,
+        "start_percent": 0.0,
+        "end_percent": 0.35,
+        "cross_mask_strength": 1.0,
+        "self_mask_strength": 0.2,
+        "base_ratio": 0.1,
+        "cross_inject_every_n_blocks": 1,
+        "self_inject_every_n_blocks": 1,
+    }
+    assert not any(node["class_type"] == "ETN_AttentionMask" for node in w.root.values())
+
+
+def test_anima_regional_conditioning_requires_custom_nodes():
+    w = ComfyWorkflow(ComfyObjectInfo({"CLIPTextEncode": {}}))
+
+    with pytest.raises(RuntimeError) as error:
+        workflow.apply_attention_mask(
+            w,
+            workflow.Output(90, 0),
+            _regional_conditioning(),
+            workflow.Clip(workflow.Output(94, 0), Arch.anima),
+        )
+
+    assert (
+        str(error.value)
+        == "ComfyUI-Anima-Regional-Conditioning is required for Anima regional prompts"
+    )
+
+
+def test_anima_regional_conditioning_preserves_sdxl_attention_mask():
+    w = ComfyWorkflow()
+    model, regions = workflow.apply_attention_mask(
+        w,
+        workflow.Output(90, 0),
+        _regional_conditioning(),
+        workflow.Clip(workflow.Output(94, 0), Arch.sdxl),
+    )
+
+    assert regions is not None
+    assert w.root[str(model.node)]["class_type"] == "ETN_AttentionMask"
+    assert not any(
+        node["class_type"] in {"AnimaConditioningRegion", "ApplyAnimaRegionalConditioningPatch"}
+        for node in w.root.values()
+    )
 
 
 def _anima_control_workflow(

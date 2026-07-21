@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 
 # Version identifier for all the resources defined here. This is used as the server version.
 # It usually follows the plugin version, but not all new plugin versions also require a server update.
-version = "1.53.0"
+version = "1.55.0"
 
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
 comfy_version = "4800e78518ebb1f2a9443ea5418edbff6c3935f9"
@@ -81,6 +81,13 @@ optional_custom_nodes = [
         "https://github.com/LuciferTC9527/ComfyUI-Anima_IP-Adapter",
         "3813b8c8a655e1a1860b45d9a84ed43383528074",
         ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"],
+    ),
+    CustomNode(
+        "Anima Regional Conditioning",
+        "Comfyui-Anima-Regional-Conditioning",
+        "https://github.com/Sen-sou/Comfyui-Anima-Regional-Conditioning",
+        "099cf1fa052721394963418455d49f7087efaf6c",
+        ["AnimaConditioningRegion", "ApplyAnimaRegionalConditioningPatch"],
     ),
 ]
 
