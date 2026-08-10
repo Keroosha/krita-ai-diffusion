@@ -6,6 +6,7 @@ import asyncio
 import shutil
 import subprocess
 import sys
+import tempfile
 from itertools import chain
 from pathlib import Path
 
@@ -39,17 +40,26 @@ def copy_scripts():
         shutil.copy(source_file, target_dir)
 
 
-def download_repository(url: str, target: Path, revision):
+def download_repository(url: str, target: Path, revision, archive_subdir: str | None = None):
     if not target.exists():
-        archive = target.parent / f"{target.name}.zip"
-        if not url.endswith(".zip"):  # git repo URL
-            url = f"{url}/archive/{revision}.zip"
-        print("Downloading", url)
-        with open(archive, "wb") as f:
-            f.write(requests.get(url, allow_redirects=True).content)
-        shutil.unpack_archive(archive, target.parent)
-        archive.unlink()
-        shutil.move(target.parent / f"{target.name}-{revision}", target)
+        with tempfile.TemporaryDirectory(dir=target.parent) as temporary_dir:
+            temporary_root = Path(temporary_dir)
+            archive = temporary_root / f"{target.name}.zip"
+            if not url.endswith(".zip"):  # git repo URL
+                url = f"{url}/archive/{revision}.zip"
+            print("Downloading", url)
+            with open(archive, "wb") as f:
+                f.write(requests.get(url, allow_redirects=True).content)
+            shutil.unpack_archive(archive, temporary_root)
+
+            extracted_folder = (
+                temporary_root / archive_subdir
+                if archive_subdir
+                else temporary_root / f"{target.name}-{revision}"
+            )
+            if not extracted_folder.is_dir():
+                raise RuntimeError(f"Archive subdirectory '{archive_subdir}' does not exist")
+            shutil.move(extracted_folder, target)
 
 
 def download_repositories():
@@ -59,7 +69,12 @@ def download_repositories():
     download_repository(resources.comfy_url, comfy_dir, resources.comfy_version)
     download_repository(manager_url, custom_nodes_dir / "ComfyUI-Manager", "main")
     for repo in chain(resources.required_custom_nodes, resources.optional_custom_nodes):
-        download_repository(repo.url, custom_nodes_dir / repo.folder, repo.version)
+        download_repository(
+            repo.url,
+            custom_nodes_dir / repo.folder,
+            repo.version,
+            repo.archive_subdir,
+        )
 
 
 def upgrade_python_dependencies():

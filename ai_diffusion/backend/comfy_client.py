@@ -229,6 +229,7 @@ class ComfyClient(Client):
 
         loras = nodes.options("LoraLoader", "lora_name")
         available_resources.update(_find_loras(loras))
+        available_resources.update(_find_anima_pose_control_resources(nodes))
 
         # Workarounds for DirectML
         if self.device_info.type == "privateuseone":
@@ -874,7 +875,6 @@ def _find_anima_model_patches(model_list: Sequence[str]):
         ControlMode.scribble,
         ControlMode.line_art,
         ControlMode.depth,
-        ControlMode.pose,
     ]
     return {
         resource_id(ResourceKind.model_patch, Arch.anima, mode): _find_model(
@@ -889,6 +889,14 @@ def _find_anima_model_patch_resources(nodes: ComfyObjectInfo):
         return {}
     model_list = nodes.options("ModelPatchLoader", "name")
     return _find_anima_model_patches(model_list)
+
+
+def _find_anima_pose_control_resources(nodes: ComfyObjectInfo) -> dict[str, str | None]:
+    if "LoraLoaderModelOnly" not in nodes or "AnimaControlApply" not in nodes:
+        return {}
+    model_list = nodes.options("LoraLoaderModelOnly", "lora_name")
+    id = ResourceId(ResourceKind.lora, Arch.anima, ControlMode.pose)
+    return {id.string: _find_model(model_list, id.kind, id.arch, id.identifier)}
 
 
 def _find_style_models(model_list: Sequence[str]):
@@ -909,7 +917,12 @@ def _find_upscalers(model_list: Sequence[str]):
 
 
 def _find_loras(model_list: Sequence[str]):
-    loras = (ResourceId.parse(r) for r in resources.search_paths if r.startswith("lora"))
+    anima_pose = ResourceId(ResourceKind.lora, Arch.anima, ControlMode.pose)
+    loras = (
+        ResourceId.parse(r)
+        for r in resources.search_paths
+        if r.startswith("lora") and r != anima_pose.string
+    )
     return {id.string: _find_model(model_list, id.kind, id.arch, id.identifier) for id in loras}
 
 

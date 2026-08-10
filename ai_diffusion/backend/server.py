@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
 import time
 from collections.abc import Callable
 from enum import Enum
@@ -314,8 +315,10 @@ class Server:
             resource_url = f"{pkg.url}/archive/{pkg.version}.zip"
         resource_zip_path = self._cache_dir / f"{pkg.folder}-{pkg.version}.zip"
         await _download_cached(pkg.name, network, resource_url, resource_zip_path, cb)
-        await _extract_archive(pkg.name, resource_zip_path, folder.parent, cb)
-        await rename_extracted_folder(pkg.name, folder, pkg.version)
+        cb(f"Installing {pkg.name}", f"Extracting {resource_zip_path} to {folder}")
+        await extract_custom_node(
+            pkg.name, resource_zip_path, folder, pkg.version, pkg.archive_subdir
+        )
         cb(f"Installing {pkg.name}", f"Finished installing {pkg.name}")
 
     async def _install_insightface(self, network: QNetworkAccessManager, cb: InternalCB):
@@ -793,6 +796,32 @@ async def _download_cached(
         cb(f"Downloading {name}", f"Downloading {url} to {file}")
         async for progress in download(network, url, file):
             cb(f"Downloading {name}", progress)
+
+
+async def extract_custom_node(
+    name: str,
+    archive: Path,
+    target: Path,
+    version: str,
+    archive_subdir: str | None = None,
+) -> None:
+    if archive_subdir is None:
+        await _extract_archive(name, archive, target.parent, lambda *_: None)
+        await rename_extracted_folder(name, target, version)
+        return
+
+    temporary_root = Path(tempfile.mkdtemp(prefix=f"{target.name}-", dir=target.parent))
+    try:
+        await _extract_archive(name, archive, temporary_root, lambda *_: None)
+        extracted_folder = temporary_root / archive_subdir
+        if not extracted_folder.is_dir():
+            raise RuntimeError(
+                f"Error during {name} installation: archive subdirectory "
+                f"'{archive_subdir}' does not exist"
+            )
+        shutil.move(extracted_folder, target)
+    finally:
+        shutil.rmtree(temporary_root, ignore_errors=True)
 
 
 async def _extract_archive(name: str, archive: Path, target: Path, cb: InternalCB):

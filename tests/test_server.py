@@ -3,6 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 
 import pytest
 from PyQt6.QtNetwork import QNetworkAccessManager
@@ -242,6 +243,33 @@ async def test_try_install():
         with pytest.raises(FileExistsError):
             await server.try_install(target, install_func, target)
         assert target.exists()
+
+
+def test_extract_custom_node_archive_subdir(tmp_path: Path):
+    archive = tmp_path / "node.zip"
+    with ZipFile(archive, "w") as zip_file:
+        zip_file.writestr("bundle/nested-node/__init__.py", "NODE = True")
+        zip_file.writestr("bundle/sibling/file.py", "SIBLING = True")
+
+    target = tmp_path / "target"
+    asyncio.run(
+        server.extract_custom_node("Test", archive, target, "revision", "bundle/nested-node")
+    )
+    assert (target / "__init__.py").read_text() == "NODE = True"
+    assert not (target / "sibling").exists()
+
+    missing_target = tmp_path / "missing-target"
+    with pytest.raises(
+        RuntimeError,
+        match="Error during Test installation: archive subdirectory "
+        "'bundle/missing' does not exist",
+    ):
+        asyncio.run(
+            server.extract_custom_node(
+                "Test", archive, missing_target, "revision", "bundle/missing"
+            )
+        )
+    assert not missing_target.exists()
 
 
 @pytest.mark.parametrize("scenario", ["default", "target-empty", "target-exists", "source-missing"])

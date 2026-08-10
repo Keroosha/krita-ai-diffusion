@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 
 # Version identifier for all the resources defined here. This is used as the server version.
 # It usually follows the plugin version, but not all new plugin versions also require a server update.
-version = "1.53.0"
+version = "1.54.0"
 
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
 comfy_version = "4800e78518ebb1f2a9443ea5418edbff6c3935f9"
@@ -22,6 +22,7 @@ class CustomNode(NamedTuple):
     url: str
     version: str
     nodes: Sequence[str]
+    archive_subdir: str | None = None
 
 
 required_custom_nodes = [
@@ -81,6 +82,14 @@ optional_custom_nodes = [
         "https://github.com/LuciferTC9527/ComfyUI-Anima_IP-Adapter",
         "3813b8c8a655e1a1860b45d9a84ed43383528074",
         ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"],
+    ),
+    CustomNode(
+        "Anima Pose Control",
+        "anima_control_lora",
+        "https://huggingface.co/Claquasse/Anima-Control-Pose/resolve/8f559771d5a49a02fa03f7df2a05ccb7eecb3a2a/anima_control_tools.zip",
+        "8f559771d5a49a02fa03f7df2a05ccb7eecb3a2a",
+        ["AnimaControlApply"],
+        "anima_control_tools/anima_control_lora",
     ),
 ]
 
@@ -767,7 +776,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.controlnet, Arch.flux, ControlMode.soft_edge): ["mistoline_flux"],
     resource_id(ResourceKind.controlnet, Arch.illu, ControlMode.soft_edge): ["noob-sdxl-controlnet-softedge", "noobaixlcontrolnet_epssoftedge"],
     resource_id(ResourceKind.controlnet, Arch.sd15, ControlMode.canny_edge): ["control_v11p_sd15_canny", "control_lora_rank128_v11p_sd15_canny"],
-    resource_id(ResourceKind.controlnet, Arch.sdxl, ControlMode.canny_edge): ["xinsircanny", "canny-sdxl" "control-lora-canny-rank", "sai_xl_canny_"],
+    resource_id(ResourceKind.controlnet, Arch.sdxl, ControlMode.canny_edge): ["xinsircanny", "canny-sdxl", "control-lora-canny-rank", "sai_xl_canny_"],
     resource_id(ResourceKind.controlnet, Arch.flux, ControlMode.canny_edge): ["flux-canny", "mistoline_flux"],
     resource_id(ResourceKind.controlnet, Arch.illu, ControlMode.canny_edge): ["noob_sdxl_controlnet_canny", "noobaixlcontrolnet_epscanny"],
     resource_id(ResourceKind.controlnet, Arch.sd15, ControlMode.depth): ["control_sd15_depth_anything", "control_v11f1p_sd15_depth", "control_lora_rank128_v11f1p_sd15_depth"],
@@ -779,7 +788,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.controlnet, Arch.illu, ControlMode.normal): ["noob-sdxl-controlnet-normal", "noobaixlcontrolnet_epsnormal"],
     resource_id(ResourceKind.controlnet, Arch.sd15, ControlMode.pose): ["control_v11p_sd15_openpose", "control_lora_rank128_v11p_sd15_openpose"],
     resource_id(ResourceKind.controlnet, Arch.sdxl, ControlMode.pose): ["xinsiropenpose", "openpose-sdxl", "control-lora-openposexl2-rank", "thibaud_xl_openpose"],
-    resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.pose): ["anima*lllite*pose", "anima*lllite*openpose"],
+    resource_id(ResourceKind.lora, Arch.anima, ControlMode.pose): ["anima_pose_preview2"],
     resource_id(ResourceKind.controlnet, Arch.illu, ControlMode.pose): ["noob-sdxl-controlnet-openpose", "noobaixlcontrolnet_openpose"],
     resource_id(ResourceKind.controlnet, Arch.sd15, ControlMode.segmentation): ["control_v11p_sd15_seg", "control_lora_rank128_v11p_sd15_seg"],
     resource_id(ResourceKind.controlnet, Arch.sdxl, ControlMode.segmentation): ["sdxl_segmentation_ade20k_controlnet"],

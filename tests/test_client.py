@@ -24,7 +24,9 @@ from ai_diffusion.backend.comfy_client import (
     _extract_tagger_output,
     _find_anima_ip_adapter_resources,
     _find_anima_model_patch_resources,
+    _find_anima_pose_control_resources,
     _find_ip_adapters,
+    _find_loras,
     parse_url,
     websocket_url,
 )
@@ -171,7 +173,6 @@ def test_anima_model_patch_discovery_is_node_gated():
         "anima-lllite-scribble-1.safetensors",
         "anima-lllite-lineart-1.safetensors",
         "anima-lllite-depth-1.safetensors",
-        "anima-lllite-pose-1.safetensors",
     ]
     nodes = ComfyObjectInfo({
         "ModelPatchLoader": _node_options("name", filenames),
@@ -184,13 +185,31 @@ def test_anima_model_patch_discovery_is_node_gated():
         resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.scribble): filenames[2],
         resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.line_art): filenames[3],
         resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.depth): filenames[4],
-        resource_id(ResourceKind.model_patch, Arch.anima, ControlMode.pose): filenames[5],
     }
 
     assert not _find_anima_model_patch_resources(
         ComfyObjectInfo({"ModelPatchLoader": _node_options("name", filenames)})
     )
     assert not _find_anima_model_patch_resources(ComfyObjectInfo({"AnimaLLLiteApply": {}}))
+
+
+def test_anima_pose_control_discovery_is_node_gated():
+    filename = "anima_pose_preview2.safetensors"
+    id = resource_id(ResourceKind.lora, Arch.anima, ControlMode.pose)
+    nodes = ComfyObjectInfo({
+        "LoraLoaderModelOnly": _node_options("lora_name", [filename]),
+        "AnimaControlApply": {},
+    })
+    assert _find_anima_pose_control_resources(nodes) == {id: filename}
+
+    assert not _find_anima_pose_control_resources(
+        ComfyObjectInfo({"LoraLoaderModelOnly": _node_options("lora_name", [filename])})
+    )
+    assert not _find_anima_pose_control_resources(ComfyObjectInfo({"AnimaControlApply": {}}))
+
+    nodes.nodes["LoraLoaderModelOnly"] = _node_options("lora_name", ["other.safetensors"])
+    assert _find_anima_pose_control_resources(nodes) == {id: None}
+    assert id not in _find_loras([filename])
 
 
 def test_anima_ip_adapter_discovery_is_node_gated_and_exact():

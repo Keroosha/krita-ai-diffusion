@@ -383,7 +383,6 @@ def _anima_control_workflow(
         (ControlMode.scribble, ControlMode.universal),
         (ControlMode.line_art, ControlMode.universal),
         (ControlMode.depth, ControlMode.depth),
-        (ControlMode.pose, ControlMode.pose),
     ],
 )
 def test_anima_structural_control_uses_native_lllite(mode: ControlMode, patch_mode: ControlMode):
@@ -413,7 +412,69 @@ def test_anima_structural_control_uses_native_lllite(mode: ControlMode, patch_mo
     )
 
 
-@pytest.mark.parametrize("mode", [ControlMode.inpaint, ControlMode.depth, ControlMode.pose])
+def test_anima_pose_control_uses_native_control_lora():
+    w = ComfyWorkflow()
+    models = ClientModels()
+    filename = "anima_pose_preview2.safetensors"
+    models.resources[resource_id(ResourceKind.lora, Arch.anima, ControlMode.pose)] = filename
+    cond = workflow.ConditioningOutput(workflow.Output(91, 0), workflow.Output(92, 0))
+    control = workflow.Control(
+        ControlMode.pose,
+        workflow.ImageOutput(workflow.Output(93, 0)),
+        strength=0.5,
+        range=(0.1, 0.8),
+    )
+
+    model, result = workflow.apply_control(
+        w,
+        workflow.Output(90, 0),
+        cond,
+        [control],
+        Extent(64, 64),
+        workflow.Output(94, 0),
+        models.for_arch(Arch.anima),
+    )
+
+    loras = [
+        (id, node) for id, node in w.root.items() if node["class_type"] == "LoraLoaderModelOnly"
+    ]
+    encodes = [(id, node) for id, node in w.root.items() if node["class_type"] == "VAEEncode"]
+    applies = [
+        (id, node) for id, node in w.root.items() if node["class_type"] == "AnimaControlApply"
+    ]
+    assert result == cond
+    assert len(loras) == len(encodes) == len(applies) == 1
+
+    lora_id, lora = loras[0]
+    encode_id, encode = encodes[0]
+    apply_id, apply = applies[0]
+    assert lora["inputs"] == {
+        "model": ["90", 0],
+        "lora_name": filename,
+        "strength_model": 0.5,
+    }
+    assert encode["inputs"] == {"vae": ["94", 0], "pixels": ["93", 0]}
+    assert apply["inputs"] == {
+        "model": [lora_id, 0],
+        "control_latent": [encode_id, 0],
+        "control_embedder_path": filename,
+        "strength": 0.5,
+    }
+    assert model.node == int(apply_id)
+    assert "start_percent" not in apply["inputs"]
+    assert "end_percent" not in apply["inputs"]
+    assert not any(
+        node["class_type"] in {"ModelPatchLoader", "AnimaLLLiteApply"} for node in w.root.values()
+    )
+
+
+def test_anima_pose_rejects_legacy_model_patch():
+    with pytest.raises(RuntimeError) as error:
+        _anima_control_workflow(ControlMode.pose, ControlMode.pose)
+    assert str(error.value) == "LoRA model not found for mode ControlMode.pose"
+
+
+@pytest.mark.parametrize("mode", [ControlMode.inpaint, ControlMode.depth])
 def test_anima_universal_patch_does_not_substitute_specialized_hints(mode: ControlMode):
     with pytest.raises(RuntimeError, match=f"Model patch not found for mode {mode}"):
         _anima_control_workflow(mode, ControlMode.universal)

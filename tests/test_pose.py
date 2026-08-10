@@ -75,6 +75,17 @@ def test_pose_from_json():
     assert pose.joints[JointIndex(1, 0)] == Point(-11, -12)
 
 
+def test_pose_from_json_normalized_coordinates():
+    pose = Pose.from_open_pose_json({
+        "canvas_width": 512,
+        "canvas_height": 1036,
+        "people": [{"pose_keypoints_2d": [0.25, 0.25, 1, 0.5, 0.5, 0.5] + [0, 0, 0] * 16}],
+    })
+
+    assert pose.joints[JointIndex(0, 0)] == Point(128, 259)
+    assert pose.joints[JointIndex(0, 1)] == Point(256, 518)
+
+
 def test_pose_from_json_list():
     frame = {
         "canvas_width": 100,

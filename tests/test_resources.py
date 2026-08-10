@@ -100,6 +100,10 @@ def test_anima_managed_resources():
             "anima-lllite-inpainting-v2.safetensors",
             "5242e677d2be34ee70ca7c97c3b14ff5ee49838c03fc1e60ac4852a180db6ef5",
         ),
+        ResourceId(ResourceKind.lora, Arch.anima, ControlMode.pose): (
+            "anima_pose_preview2.safetensors",
+            "c10fa11628e9b1bf16dfe095ac5c6dc4ddd9ae77d7fe023d0a1857f7e29c516f",
+        ),
     }
     for id, (filename, sha256) in expected.items():
         model = res.get_resource(id)
@@ -129,10 +133,13 @@ def test_anima_search_paths_and_custom_node():
         ControlMode.scribble,
         ControlMode.line_art,
         ControlMode.depth,
-        ControlMode.pose,
     ]
     assert all(res.search_path(ResourceKind.model_patch, Arch.anima, mode) for mode in modes)
     assert all(res.search_path(ResourceKind.controlnet, Arch.anima, mode) is None for mode in modes)
+    assert res.search_path(ResourceKind.model_patch, Arch.anima, ControlMode.pose) is None
+    assert res.search_path(ResourceKind.lora, Arch.anima, ControlMode.pose) == [
+        "anima_pose_preview2"
+    ]
     universal = res.search_path(ResourceKind.model_patch, Arch.anima, ControlMode.universal)
     inpaint = res.search_path(ResourceKind.model_patch, Arch.anima, ControlMode.inpaint)
     assert universal is not None and universal[0] == "anima-lllite-any-test-like-v2"
@@ -145,4 +152,17 @@ def test_anima_search_paths_and_custom_node():
     node = next(node for node in res.optional_custom_nodes if node.name == "Anima IP-Adapter")
     assert node.version == "3813b8c8a655e1a1860b45d9a84ed43383528074"
     assert node.nodes == ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"]
+
+    pose_node = next(
+        node for node in res.optional_custom_nodes if node.name == "Anima Pose Control"
+    )
+    assert pose_node.folder == "anima_control_lora"
+    assert (
+        pose_node.url == "https://huggingface.co/Claquasse/Anima-Control-Pose/resolve/"
+        "8f559771d5a49a02fa03f7df2a05ccb7eecb3a2a/anima_control_tools.zip"
+    )
+    assert pose_node.version == "8f559771d5a49a02fa03f7df2a05ccb7eecb3a2a"
+    assert pose_node.nodes == ["AnimaControlApply"]
+    assert pose_node.archive_subdir == "anima_control_tools/anima_control_lora"
+    assert res.version == "1.54.0"
     assert res.comfy_version == "4800e78518ebb1f2a9443ea5418edbff6c3935f9"

@@ -584,6 +584,13 @@ def apply_control(
             image = w.invert_image(image)
 
         if models.arch is Arch.anima:
+            if control.mode is ControlMode.pose:
+                if lora_name := models.lora.find(ControlMode.pose):
+                    model = w.apply_anima_pose_control(
+                        model, lora_name, image, vae, control.strength
+                    )
+                    continue
+                raise RuntimeError("LoRA model not found for mode ControlMode.pose")
             if patch_name := patches.find(control.mode, allow_universal=True):
                 patch = w.load_model_patch(patch_name)
                 mask = control.mask.load(w) if control.mask is not None else None

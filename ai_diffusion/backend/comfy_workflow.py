@@ -796,6 +796,25 @@ class ComfyWorkflow:
             )
         )
 
+    def apply_anima_pose_control(
+        self,
+        model: Output,
+        lora_name: str,
+        image: Output,
+        vae: Output,
+        strength: float,
+    ) -> Output:
+        model = self.load_lora_model(model, lora_name, strength)
+        control_latent = self.vae_encode(vae, image)
+        return self.add(
+            "AnimaControlApply",
+            1,
+            model=model,
+            control_latent=control_latent,
+            control_embedder_path=lora_name,
+            strength=strength,
+        )
+
     def apply_anima_lllite(
         self,
         model: Output,

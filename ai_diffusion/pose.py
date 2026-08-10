@@ -223,10 +223,15 @@ class Pose:
                 )
             ):
                 raise ValueError("OpenPose JSON 'pose_keypoints_2d' must contain 54 finite numbers")
-            return {
-                JointIndex(person, joint): Point(x, y)
+            points = [
+                (joint, x, y)
                 for joint, (x, y, confidence) in enumerate(batched(keypoints, 3))
                 if confidence > 0.1
+            ]
+            is_normalized = bool(points) and all(abs(x) <= 1 and abs(y) <= 1 for _, x, y in points)
+            scale = Point(width, height) if is_normalized else Point(1, 1)
+            return {
+                JointIndex(person, joint): Point(x * scale.x, y * scale.y) for joint, x, y in points
             }
 
         extent = Extent(width, height)

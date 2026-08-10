@@ -825,6 +825,17 @@
       ]
     },
     {
+      "id": "lora-pose-anima",
+      "name": "Pose Control Preview-2 (Anima)",
+      "files": [
+        {
+          "path": "models/loras/anima_pose_preview2.safetensors",
+          "url": "https://huggingface.co/Claquasse/Anima-Control-Pose/resolve/8f559771d5a49a02fa03f7df2a05ccb7eecb3a2a/anima_pose_preview2.safetensors",
+          "sha256": "c10fa11628e9b1bf16dfe095ac5c6dc4ddd9ae77d7fe023d0a1857f7e29c516f"
+        }
+      ]
+    },
+    {
       "id": "ip_adapter-reference-anima",
       "name": "Character Reference IP-Adapter (Anima)",
       "files": [
