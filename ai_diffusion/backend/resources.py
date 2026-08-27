@@ -15,7 +15,6 @@ version = "1.53.0"
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
 comfy_version = "4800e78518ebb1f2a9443ea5418edbff6c3935f9"
 
-
 class CustomNode(NamedTuple):
     name: str
     folder: str
@@ -29,7 +28,7 @@ required_custom_nodes = [
         "ControlNet Preprocessors",
         "comfyui_controlnet_aux",
         "https://github.com/Fannovel16/comfyui_controlnet_aux",
-        "83463c2e4b04e729268e57f638b4212e0da4badc",
+        "e8b689a513c3e6b63edc44066560ca5919c0576e",
         ["InpaintPreprocessor", "DepthAnythingV2Preprocessor"],
     ),
     CustomNode(
@@ -43,7 +42,7 @@ required_custom_nodes = [
         "External Tooling Nodes",
         "comfyui-tooling-nodes",
         "https://github.com/Acly/comfyui-tooling-nodes",
-        "5d3194f4d4158ab31df7a060e1e4c56fa03f320c",
+        "ca01116495cad1f2d8440641f26ced8fbdbbe8de",
         ["ETN_LoadImageCache", "ETN_SaveImageCache", "ETN_Translate"],
     ),
     CustomNode(
@@ -81,8 +80,7 @@ optional_custom_nodes = [
         "https://github.com/LuciferTC9527/ComfyUI-Anima_IP-Adapter",
         "3813b8c8a655e1a1860b45d9a84ed43383528074",
         ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"],
-    ),
-]
+    ),]
 
 
 class Arch(Enum):
@@ -261,7 +259,8 @@ class Arch(Enum):
                 return ["ministral"]
             case Arch.krea2:
                 return ["qwen_3vl_4b"]
-        raise ValueError(f"Unsupported architecture: {self}")
+            case _:
+                raise ValueError(f"Unsupported architecture: {self}")
 
     @staticmethod
     def list():
@@ -489,10 +488,8 @@ class VerificationStatus(NamedTuple):
 
 class ModelRequirements(Enum):
     none = 0
-    insightface = 1
     cuda = 2  # requires CUDA (NVIDIA only)
-    cuda_fp4 = 3  # requires FP4 support (Blackwell)
-    no_cuda = 4  # model alternative for hardware without CUDA support
+    no_cuda = 3  # model alternative for hardware without CUDA support
 
 
 class ModelFile(NamedTuple):

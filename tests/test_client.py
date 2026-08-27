@@ -255,11 +255,6 @@ def check_resolve_sd_version(client: ComfyClient, arch: Arch):
     assert resolve_arch(style, None) == arch
 
 
-def check_nunchaku(server: Server, client: ComfyClient):
-    if server.backend is ServerBackend.cuda:
-        assert "NunchakuFluxDiTLoader" in client.models.node_inputs.nodes
-
-
 @qtapp
 async def test_info(pytestconfig, comfy_server: Server):
     assert comfy_server.url is not None
@@ -272,7 +267,6 @@ async def test_info(pytestconfig, comfy_server: Server):
     check_client_info(client)
     check_resolve_sd_version(client, Arch.sd15)
     # check_resolve_sd_version(client, Arch.sdxl) # no SDXL checkpoint in default installation
-    check_nunchaku(comfy_server, client)
 
 
 @qtapp

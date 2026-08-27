@@ -68,6 +68,17 @@ that the UI code runs without errors:
 python scripts/design.py --exit
 ```
 
+### Creating a worktree
+
+1. create a worktree of the `krita-ai-diffusion` repository (this repository)
+2. create a worktree of the `diffusion-service` repository located in `service` folder if present.
+   place it inside the worktree from step 1, as a folder named `service`, so that the structure matches.
+3. symlink the `scripts/downloads` folder into the new worktree.
+4. symlink `service/web/.env.local` and `service/api/.dev.vars` if they exist.
+5. create a fresh venv with `uv` inside the new worktree. match python version and packages from the venv
+   in the main clone rather than installing from requirements.
+
+
 ## Code Guidelines
 
 * Avoid docstrings/comments for small functions and intuitive code

@@ -612,6 +612,10 @@
     "Character threshold": null,
     "The WD14 Tagger node is not installed or has an incompatible input contract": null,
     "Replace positive prompt": null,
-    "Replace underscores with spaces": null
+    "Replace underscores with spaces": null,
+    "Workflow contains duplicate parameter names: {names}. Each parameter name must be unique.": null,
+    "Text prompt regions have not been set up.": null,
+    "From Regions": null,
+    "Generate segmentation control layer from current regions": null
   }
 }
