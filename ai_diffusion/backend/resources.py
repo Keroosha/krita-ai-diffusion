@@ -10,10 +10,11 @@ from typing import Any, NamedTuple
 
 # Version identifier for all the resources defined here. This is used as the server version.
 # It usually follows the plugin version, but not all new plugin versions also require a server update.
-version = "1.53.0"
+version = "1.54.0"
 
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
-comfy_version = "4800e78518ebb1f2a9443ea5418edbff6c3935f9"
+comfy_version = "4da9e2dbead52fc1e68beae33fe3d7ad63b63241"
+
 
 class CustomNode(NamedTuple):
     name: str
@@ -68,19 +69,13 @@ optional_custom_nodes = [
         ["UnetLoaderGGUF", "DualCLIPLoaderGGUF"],
     ),
     CustomNode(
-        "Nunchaku",
-        "ComfyUI-nunchaku",
-        "https://github.com/nunchaku-tech/ComfyUI-nunchaku",
-        "90999af9c26e4a40927fb26c028ece8875ac25b3",
-        ["NunchakuFluxDiTLoader"],
-    ),
-    CustomNode(
         "Anima IP-Adapter",
         "ComfyUI-Anima_IP-Adapter",
         "https://github.com/LuciferTC9527/ComfyUI-Anima_IP-Adapter",
         "3813b8c8a655e1a1860b45d9a84ed43383528074",
         ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"],
-    ),]
+    ),
+]
 
 
 class Arch(Enum):

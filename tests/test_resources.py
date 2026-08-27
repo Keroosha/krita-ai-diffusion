@@ -70,6 +70,12 @@ def test_resource_ids_exist():
         assert model is not None, f"Resource ID {resource_id} not found"
 
 
+def test_managed_server_versions():
+    assert res.version == "1.54.0"
+    assert res.comfy_version == "4da9e2dbead52fc1e68beae33fe3d7ad63b63241"
+    assert all(node.name != "Nunchaku" for node in res.optional_custom_nodes)
+
+
 def test_anima_architecture_and_resolution():
     assert Arch.from_string("anima") is Arch.anima
     assert Arch.from_string("unknown", filename="models/anima-base-v1.0.safetensors") is Arch.anima
@@ -145,4 +151,3 @@ def test_anima_search_paths_and_custom_node():
     node = next(node for node in res.optional_custom_nodes if node.name == "Anima IP-Adapter")
     assert node.version == "3813b8c8a655e1a1860b45d9a84ed43383528074"
     assert node.nodes == ["AnimaIPAdapterLoader", "AnimaIPAdapterApply"]
-    assert res.comfy_version == "4800e78518ebb1f2a9443ea5418edbff6c3935f9"
